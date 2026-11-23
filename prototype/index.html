@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Auto Video Editor</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<meta name="theme-color" content="#111114">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@600&family=Noto+Sans+Devanagari:wght@600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#111114;--panel:#1b1b20;--line:#2e2e36;--text:#ececf1;--muted:#9a9aa6;--accent:#6c8cff;--magic:#b46cff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,sans-serif}
+header{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header h1{font-size:16px;margin:0 auto 0 0}
+main{display:grid;grid-template-columns:270px minmax(0,1fr) 340px;gap:12px;padding:12px}
+@media(max-width:1000px){main{grid-template-columns:minmax(0,1fr)}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+#seqPanel{grid-column:1/-1}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+h3{font-size:12px;color:var(--muted);margin:14px 0 8px}
+button,select,input,textarea{background:#26262d;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
+button{cursor:pointer} button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.magic{background:var(--magic);border-color:var(--magic);color:#fff;font-weight:600}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.muted{color:var(--muted)}
+.drop{border:1px dashed var(--line);border-radius:8px;padding:14px;text-align:center;margin-bottom:10px}
+.drop.over{border-color:var(--accent)}
+.media{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--line)}
+.media span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stage{display:flex;justify-content:center;background:#000;border-radius:6px;margin-bottom:10px}
+canvas{display:block;max-width:100%;max-height:60vh;width:auto;height:auto}
+#scrub{width:100%;padding:0}
+#timeline{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+.card{flex:1 0 180px;background:#23232a;border:1px solid var(--line);border-radius:8px;padding:8px}
+.card.active{border-color:var(--accent)}
+.card.over{outline:2px dashed var(--accent)}
+.card b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.card label{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:6px}
+.card input,.card select{width:100px}
+.handle{cursor:grab;padding:0 4px;user-select:none}
+.sub{border-bottom:1px solid var(--line);padding:6px 0}
+.sub input{width:72px}
+.sub textarea{width:100%;resize:vertical;font-family:"Noto Sans","Noto Sans Devanagari",system-ui,sans-serif}
+#busy{position:fixed;inset:0;background:#000d;display:grid;place-items:center;z-index:9;text-align:center;padding:16px}
+#busy[hidden]{display:none}
+#busyMsg{font-size:18px;max-width:520px;line-height:1.5}
+progress{width:min(420px,80vw);margin-top:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 Auto Video Editor</h1>
+  <button id="openBtn">Open project</button>
+  <button id="saveBtn">Save project</button>
+  <input type="file" id="projFile" accept=".vedit" hidden>
+  <label>Ratio <select id="ratio"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option><option>4:3</option></select></label>
+  <label>Fit <select id="fit"><option value="cover">Fill (crop)</option><option value="contain">Fit (bars)</option></select></label>
+  <label>Speech <select id="speech"><option value="hi">Hindi</option><option value="en">English</option></select></label>
+  <label title="Brighten and boost colour only on clips that look dull"><input type="checkbox" id="autoColor" checked> Auto color</label>
+  <label title="Auto edit removes silent parts before, after and between speech"><input type="checkbox" id="cutSilence" checked> Cut silences</label>
+  <label><input type="checkbox" id="autoExport" checked> Export when done</label>
+  <button class="magic" id="autoBtn">✨ Auto edit</button>
+  <button class="primary" id="export">Export video</button>
+  <a id="lastExport" class="primary" hidden style="color:var(--accent)">⬇ Download last export</a>
+  <button id="installBtn" hidden>Install app</button>
+</header>
+
+<main>
+  <section>
+    <h2>1. Upload clips</h2>
+    <div class="drop" id="drop">
+      <p class="muted">Drop videos or images here.<br>They go into the sequence in file-name order.</p>
+      <button id="uploadBtn" class="primary">Upload clips</button>
+      <input type="file" id="file" accept="video/*,image/*" multiple hidden>
+    </div>
+    <div id="mediaList"></div>
+    <h3>Music</h3>
+    <div class="row">
+      <button id="musicBtn">Add music</button>
+      <input type="file" id="musicFile" accept="audio/*" hidden>
+      <span id="musicName" class="muted">None</span>
+      <button id="musicDel" aria-label="Remove music" hidden>✕</button>
+    </div>
+    <label class="row">Volume <input type="range" id="musicVol" min="0" max="1" step="0.05" value="0.5"></label>
+    <p class="muted" style="margin:0">Music loops, fades in/out and gets quieter while someone is speaking.</p>
+  </section>
+
+  <section>
+    <h2>Preview</h2>
+    <div class="stage"><canvas id="canvas" width="1280" height="720"></canvas></div>
+    <input type="range" id="scrub" min="0" max="0" step="0.01" value="0" aria-label="Playhead">
+    <div class="row" style="margin-top:8px">
+      <button id="playBtn" class="primary">▶ Play</button>
+      <span id="time" class="muted">0:00.0 / 0:00.0</span>
+      <button id="splitBtn" style="margin-left:auto">✂ Split at playhead</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Subtitles</h2>
+    <div class="row">
+      <label>Show <select id="subLang"><option value="both">English + Hindi</option><option value="en">English only</option><option value="hi">Hindi only</option><option value="off">Off</option></select></label>
+      <button id="autoSubs">🎙 From speech</button>
+    </div>
+    <div class="row">
+      <select id="newLang" aria-label="Language for new subtitles"><option value="en">English</option><option value="hi">हिन्दी (Hindi)</option></select>
+      <button id="addSub">+ Add</button>
+      <button id="srtBtn">Import .srt</button>
+      <input type="file" id="srt" accept=".srt,.vtt" hidden>
+    </div>
+    <div id="subList"></div>
+  </section>
+
+  <section id="seqPanel">
+    <h2>2. Sequence (drag ⠿ to reorder)</h2>
+    <div id="timeline"></div>
+  </section>
+</main>
+<div id="busy" hidden><div><div id="busyMsg"></div><progress id="busyBar" hidden></progress></div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const RATIOS = {'16:9':[1280,720],'9:16':[720,1280],'1:1':[1080,1080],'4:5':[864,1080],'4:3':[960,720]};
+const MOTIONS = {none:'None',zoomin:'Zoom in',zoomout:'Zoom out',panleft:'Pan left',panright:'Pan right',fade:'Fade in/out'};
+const TRANSITIONS = {none:'Cut',crossfade:'Crossfade',dip:'Dip to black',slide:'Slide',wipe:'Wipe',zoom:'Zoom out'};
+const TR = 0.6; // transition length (s)
+const media = [];      // {id,name,type,file,el,duration,w,h,transcript}
+let timeline = [];     // {id,mediaId,in,out,motion,transition}
+const subs = [];       // {start,end,text,lang}
+let music = null;      // {name,file,el,gain}
+let t = 0, playing = false, current = 0, uid = 0, onEnd = null, dragIdx = -1, loopId = 0, imgT0 = 0, imgLocal = 0;
+const canvas = $('#canvas'), ctx = canvas.getContext('2d');
+const frame = document.createElement('canvas'), fctx = frame.getContext('2d'); // last clean frame, used by transitions
+
+const esc = s => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const fmt = s => Math.floor(s / 60) + ':' + (s % 60).toFixed(1).padStart(4, '0');
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dur = c => c.out - c.in;
+const total = () => timeline.reduce((s, c) => s + dur(c), 0);
+const getMedia = id => media.find(m => m.id === id);
+const clipStart = i => timeline.slice(0, i).reduce((s, c) => s + dur(c), 0);
+const newClip = m => ({id: ++uid, mediaId: m.id, in: 0, out: m.type === 'image' ? 3 : m.duration, motion: 'none', transition: 'none'});
+const busy = (msg, prog) => {
+  $('#busy').hidden = !msg; $('#busyMsg').innerHTML = msg || '';
+  $('#busyBar').hidden = prog == null; if (prog != null) $('#busyBar').value = prog;
+};
+
+// Which clip is at global time `time`: {i, start, local}
+function clipAt(tl, time) {
+  let start = 0;
+  for (let i = 0; i < tl.length; i++) {
+    const d = tl[i].out - tl[i].in;
+    if (time < start + d || i === tl.length - 1) return {i, start, local: clamp(time - start, 0, d)};
+    start += d;
+  }
+  return null;
+}
+
+function parseSRT(text) {
+  const toSec = s => s.trim().replace(',', '.').split(':').reduce((a, p) => a * 60 + parseFloat(p), 0);
+  return text.replace(/^﻿/, '').replace(/\r/g, '').split(/\n\s*\n/).map(block => {
+    const lines = block.trim().split('\n'), i = lines.findIndex(l => l.includes('-->'));
+    if (i < 0) return null;
+    const [a, z] = lines[i].split('-->');
+    const text = lines.slice(i + 1).join(' ').replace(/<[^>]+>/g, '').trim();
+    return {start: toSec(a), end: toSec(z.trim().split(/\s+/)[0]), text};
+  }).filter(s => s && s.text && !isNaN(s.start) && !isNaN(s.end));
+}
+
+// Place each clip's transcript (source time) onto the sequence (timeline time), following trims/reorders.
+function subsFromTranscripts(tl, mediaById) {
+  const out = [];
+  let start = 0;
+  for (const c of tl) {
+    for (const seg of mediaById(c.mediaId)?.transcript || []) {
+      const s = Math.max(seg.start, c.in), e = Math.min(seg.end, c.out);
+      if (e - s < 0.2) continue;
+      for (const lang of ['en', 'hi']) if (seg[lang]) out.push({start: start + s - c.in, end: start + e - c.in, text: seg[lang], lang});
+    }
+    start += c.out - c.in;
+  }
+  return out;
+}
+
+// ---------- Audio (routed through WebAudio so export records it) ----------
+let audioCtx, audioDest;
+function ensureAudio() {
+  if (!audioCtx) {
+    audioCtx = new AudioContext();
+    audioDest = audioCtx.createMediaStreamDestination();
+    media.forEach(connectAudio);
+    connectMusic();
+  }
+  return audioCtx.resume();
+}
+function connectAudio(m) {
+  if (!audioCtx || m.node || m.type !== 'video') return;
+  m.node = audioCtx.createMediaElementSource(m.el);
+  m.node.connect(audioCtx.destination);
+  m.node.connect(audioDest);
+}
+function connectMusic() {
+  if (!audioCtx || !music || music.gain) return;
+  music.gain = audioCtx.createGain();
+  music.gain.gain.value = 0;
+  audioCtx.createMediaElementSource(music.el).connect(music.gain);
+  music.gain.connect(audioCtx.destination);
+  music.gain.connect(audioDest);
+}
+function syncMusic() {
+  if (!music) return;
+  if (!playing) return music.el.pause();
+  const d = music.el.duration;
+  if (d) music.el.currentTime = t % d;
+  music.el.play().catch(() => {});
+}
+function musicGain() {
+  if (!music?.gain) return;
+  const speaking = subs.some(s => t >= s.start && t < s.end);
+  const v = +$('#musicVol').value * (speaking ? 0.3 : 1) * clamp(Math.min(t / 1, (total() - t) / 2), 0, 1);
+  music.gain.gain.setTargetAtTime(v, audioCtx.currentTime, 0.15);
+}
+
+// ---------- Upload ----------
+function addMedia(f, {id, transcript, toTimeline = true} = {}) {
+  return new Promise(res => {
+    const type = f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'image' : null;
+    if (!type) { alert(`${f.name} is not a video or image.`); return res(); }
+    const url = URL.createObjectURL(f);
+    const done = (el, duration, w, h) => {
+      const m = {id: id ?? ++uid, name: f.name, type, file: f, el, duration, w, h, transcript};
+      media.push(m); connectAudio(m);
+      if (toTimeline) timeline.push(newClip(m));
+      renderMedia(); renderTimeline(); res(m);
+    };
+    const fail = () => { alert(`This browser can't open ${f.name}. Try MP4 (H.264), WebM, JPG or PNG.`); res(); };
+    if (type === 'image') {
+      const img = new Image();
+      img.onload = () => done(img, 60, img.naturalWidth, img.naturalHeight); // images can last up to 60 s
+      img.onerror = fail; img.src = url;
+    } else {
+      const v = document.createElement('video');
+      v.preload = 'auto'; v.playsInline = true;
+      v.onloadedmetadata = async () => {
+        if (!isFinite(v.duration)) { await seekEl(v, 1e9); await seekEl(v, 0); } // some WebM files report Infinity until seeked
+        done(v, v.duration, v.videoWidth, v.videoHeight);
+      };
+      v.onerror = fail; v.src = url;
+    }
+  });
+}
+async function addFiles(files) {
+  pause();
+  for (const f of [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}))) await addMedia(f);
+  seek(t);
+}
+$('#uploadBtn').onclick = () => $('#file').click();
+$('#file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+const drop = $('#drop');
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+
+function renderMedia() {
+  $('#mediaList').innerHTML = media.length ? '' : '<p class="muted">No clips yet.</p>';
+  media.forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'media';
+    row.innerHTML = `<span title="${esc(m.name)}">${m.type === 'image' ? '🖼' : '🎞'} ${esc(m.name)} <small class="muted">${m.type === 'video' ? fmt(m.duration) : ''}${m.transcript?.length ? ' · 🎙' : ''}</small></span><button aria-label="Add ${esc(m.name)} to sequence again">+ Add</button>`;
+    row.querySelector('button').onclick = () => edit(() => timeline.push(newClip(m)));
+    $('#mediaList').append(row);
+  });
+}
+
+// ---------- Music ----------
+function setMusic(f) {
+  if (music) { music.el.pause(); music.gain?.disconnect(); }
+  music = null;
+  if (f) {
+    if (!f.type.startsWith('audio/')) return alert(`${f.name} is not an audio file.`);
+    const el = new Audio(URL.createObjectURL(f));
+    el.loop = true;
+    music = {name: f.name, file: f, el};
+    connectMusic();
+    if (playing) syncMusic();
+  }
+  $('#musicName').textContent = music ? music.name : 'None';
+  $('#musicDel').hidden = !music;
+}
+$('#musicBtn').onclick = () => $('#musicFile').click();
+$('#musicFile').onchange = e => { setMusic(e.target.files[0]); e.target.value = ''; };
+$('#musicDel').onclick = () => setMusic(null);
+
+// ---------- Sequence ----------
+function edit(fn) { pause(); fn(); renderTimeline(); seek(Math.min(t, total())); }
+const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${v}</option>`).join('');
+
+function renderTimeline() {
+  const box = $('#timeline');
+  box.innerHTML = timeline.length ? '' : '<p class="muted">Upload clips and they appear here in order.</p>';
+  timeline.forEach((c, i) => {
+    const m = getMedia(c.mediaId), img = m.type === 'image';
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.style.flexGrow = Math.max(1, dur(c));
+    card.innerHTML = `
+      <div class="row"><span class="handle" draggable="true" title="Drag to reorder">⠿</span><b title="${esc(m.name)}">${i + 1}. ${esc(m.name)}</b></div>
+      ${img ? '' : `<label>Start <input type="number" step="0.1" min="0" max="${(c.out - 0.1).toFixed(1)}" data-k="in" value="${c.in.toFixed(1)}"></label>`}
+      <label>${img ? 'Length' : 'End'} <input type="number" step="0.1" min="${(c.in + 0.1).toFixed(1)}" max="${m.duration.toFixed(1)}" data-k="out" value="${c.out.toFixed(1)}"></label>
+      <label>Motion <select data-k="motion">${opts(MOTIONS, c.motion)}</select></label>
+      <label>Transition <select data-k="transition"${i ? '' : ' disabled title="First clip has no transition"'}>${opts(TRANSITIONS, c.transition)}</select></label>
+      <div class="row" style="margin:6px 0 0"><span class="muted">${fmt(dur(c))}</span>
+        <button data-a="-1" aria-label="Move earlier" style="margin-left:auto">◀</button>
+        <button data-a="1" aria-label="Move later">▶</button>
+        <button data-a="del" aria-label="Remove clip">✕</button></div>`;
+    card.onchange = e => {
+      const k = e.target.dataset.k;
+      if (k === 'motion' || k === 'transition') return edit(() => c[k] = e.target.value);
+      const v = +e.target.value || 0;
+      if (k === 'in') edit(() => c.in = clamp(v, 0, c.out - 0.1));
+      if (k === 'out') edit(() => c.out = clamp(v, c.in + 0.1, m.duration));
+    };
+    card.onclick = e => {
+      const a = e.target.dataset.a;
+      if (a === 'del') edit(() => timeline.splice(i, 1));
+      else if (a) { const j = i + +a; if (j >= 0 && j < timeline.length) edit(() => [timeline[i], timeline[j]] = [timeline[j], timeline[i]]); }
+    };
+    card.querySelector('.handle').ondragstart = e => { dragIdx = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); };
+    card.ondragover = e => { if (dragIdx < 0) return; e.preventDefault(); card.classList.add('over'); };
+    card.ondragleave = () => card.classList.remove('over');
+    card.ondrop = e => {
+      e.preventDefault(); card.classList.remove('over');
+      if (dragIdx < 0 || dragIdx === i) return;
+      const from = dragIdx; dragIdx = -1;
+      edit(() => timeline.splice(i, 0, timeline.splice(from, 1)[0]));
+    };
+    card.ondragend = () => dragIdx = -1;
+    box.append(card);
+  });
+  $('#scrub').max = total();
+  updateUI();
+}
+
+$('#splitBtn').onclick = () => {
+  if (!timeline.length) return;
+  const h = clipAt(timeline, t), c = timeline[h.i];
+  if (h.local < 0.1 || dur(c) - h.local < 0.1) return alert('Move the playhead inside a clip first.');
+  edit(() => {
+    const cut = c.in + h.local, m = getMedia(c.mediaId);
+    // an image has no source time: split it into two shorter stills
+    timeline.splice(h.i + 1, 0, m.type === 'image' ? {...c, id: ++uid, in: 0, out: dur(c) - h.local, transition: 'none'} : {...c, id: ++uid, in: cut, transition: 'none'});
+    c.out = m.type === 'image' ? h.local : cut;
+  });
+};
+
+// ---------- Playback ----------
+function seekEl(el, time) {
+  return new Promise(r => {
+    if (Math.abs(el.currentTime - time) < 0.01) return r();
+    el.addEventListener('seeked', r, {once: true});
+    el.currentTime = time;
+  });
+}
+function localOf(c, m) {
+  if (m.type === 'video') return m.el.currentTime - c.in;
+  return playing ? (performance.now() - imgT0) / 1000 : imgLocal;
+}
+async function startClip(i, local) {
+  current = i;
+  const c = timeline[i], m = getMedia(c.mediaId);
+  media.forEach(x => x.type === 'video' && x !== m && x.el.pause());
+  imgLocal = local; imgT0 = performance.now() - local * 1000;
+  if (m.type === 'video') {
+    await seekEl(m.el, c.in + local);
+    if (playing) await m.el.play().catch(() => {});
+  }
+}
+function runLoop() {
+  const id = ++loopId;
+  const step = async () => {
+    if (id !== loopId || !playing) return;
+    const c = timeline[current], m = getMedia(c.mediaId), local = localOf(c, m);
+    t = clipStart(current) + clamp(local, 0, dur(c));
+    if (local >= dur(c) - 0.03 || (m.type === 'video' && m.el.ended)) {
+      if (current + 1 < timeline.length) {
+        if (m.type === 'video') m.el.pause();
+        await startClip(current + 1, 0);
+        if (id !== loopId) return;
+      } else {
+        pause(); t = total(); draw(); updateUI();
+        if (onEnd) onEnd();
+        return;
+      }
+    }
+    draw(); musicGain(); updateUI();
+    setTimeout(step, 16);
+  };
+  setTimeout(step, 16);
+}
+async function play() {
+  if (playing || !timeline.length) return;
+  await ensureAudio();
+  if (t >= total() - 0.05) t = 0;
+  playing = true; updateUI();
+  const h = clipAt(timeline, t);
+  await startClip(h.i, h.local);
+  syncMusic(); runLoop();
+}
+function pause() {
+  playing = false; loopId++;
+  media.forEach(m => m.type === 'video' && m.el.pause());
+  music?.el.pause();
+  updateUI();
+}
+async function seek(time) {
+  t = clamp(time, 0, total());
+  if (!timeline.length) { current = 0; draw(); updateUI(); return; }
+  const h = clipAt(timeline, t);
+  if (playing) { loopId++; await startClip(h.i, h.local); syncMusic(); runLoop(); }
+  else { await startClip(h.i, h.local); draw(); }
+  updateUI();
+}
+$('#playBtn').onclick = () => playing ? pause() : play();
+$('#scrub').oninput = e => seek(+e.target.value);
+document.onkeydown = e => {
+  if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); playing ? pause() : play(); }
+};
+function updateUI() {
+  $('#playBtn').textContent = playing ? '❚❚ Pause' : '▶ Play';
+  $('#time').textContent = `${fmt(t)} / ${fmt(total())}`;
+  $('#scrub').value = t;
+  document.querySelectorAll('.card').forEach((el, i) => el.classList.toggle('active', i === current));
+}
+
+// ---------- Rendering: ratio, motion, transitions, subtitles ----------
+function drawClip(c, m, local, alphaMul = 1) {
+  const W = canvas.width, H = canvas.height;
+  if (!m.w) return;
+  const d = dur(c), p = d ? local / d : 0;
+  const s = ($('#fit').value === 'cover' ? Math.max : Math.min)(W / m.w, H / m.h);
+  let k = 1, dx = 0, alpha = 1;
+  switch (c.motion) {
+    case 'zoomin': k = 1 + 0.15 * p; break;
+    case 'zoomout': k = 1.15 - 0.15 * p; break;
+    case 'panleft': k = 1.2; dx = (0.5 - p) * 0.2 * W; break;
+    case 'panright': k = 1.2; dx = (p - 0.5) * 0.2 * W; break;
+    case 'fade': alpha = clamp(Math.min(local / 0.5, (d - local) / 0.5), 0, 1); break;
+  }
+  const w = m.w * s * k, h = m.h * s * k;
+  ctx.globalAlpha = alpha * alphaMul;
+  // shortcut: Safari ignores ctx.filter, so colour grading only shows in Chrome/Edge/Firefox
+  ctx.filter = ($('#autoColor').checked && m.grade) || 'none';
+  ctx.drawImage(m.el, (W - w) / 2 + dx, (H - h) / 2, w, h);
+  ctx.filter = 'none';
+  ctx.globalAlpha = 1;
+}
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  if (frame.width !== W || frame.height !== H) { frame.width = W; frame.height = H; }
+  ctx.globalAlpha = 1; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const c = timeline[current];
+  if (c) {
+    const m = getMedia(c.mediaId), local = clamp(localOf(c, m), 0, dur(c));
+    const raw = local / TR, p = raw * raw * (3 - 2 * raw); // eased progress
+    // shortcut: `frame` holds the last frame actually shown, so a transition reached by scrubbing (not playing through) blends from that frame
+    if (current > 0 && c.transition !== 'none' && raw < 1) {
+      switch (c.transition) {
+        case 'crossfade': drawClip(c, m, local); ctx.globalAlpha = 1 - p; ctx.drawImage(frame, 0, 0); break;
+        case 'dip': if (p < 0.5) { ctx.globalAlpha = 1 - 2 * p; ctx.drawImage(frame, 0, 0); } else drawClip(c, m, local, 2 * p - 1); break;
+        case 'slide': ctx.drawImage(frame, -p * W, 0); ctx.save(); ctx.translate((1 - p) * W, 0); drawClip(c, m, local); ctx.restore(); break;
+        case 'wipe': drawClip(c, m, local); if (p < 1) ctx.drawImage(frame, p * W, 0, (1 - p) * W, H, p * W, 0, (1 - p) * W, H); break;
+        case 'zoom': { drawClip(c, m, local); const k = 1 + p * 0.5; ctx.globalAlpha = 1 - p; ctx.drawImage(frame, (W - W * k) / 2, (H - H * k) / 2, W * k, H * k); break; }
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      drawClip(c, m, local);
+      fctx.drawImage(canvas, 0, 0);
+    }
+  }
+  drawSubs(W, H);
+}
+function drawSubs(W, H) {
+  const mode = $('#subLang').value;
+  if (mode === 'off') return;
+  const active = subs.filter(s => t >= s.start && t < s.end && (mode === 'both' || s.lang === mode))
+                     .sort((a, b) => a.lang.localeCompare(b.lang)); // English line above Hindi
+  if (!active.length) return;
+  const fs = Math.round(Math.min(W, H) * 0.05), maxW = W * 0.9;
+  ctx.font = `600 ${fs}px "Noto Sans","Noto Sans Devanagari",sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.lineJoin = 'round';
+  const lines = [];
+  active.forEach(s => {
+    let line = '';
+    s.text.split(/\s+/).forEach(word => {
+      const test = line ? line + ' ' + word : word;
+      if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = word; } else line = test;
+    });
+    if (line) lines.push(line);
+  });
+  let y = H - H * 0.06 - (lines.length - 1) * fs * 1.3;
+  lines.forEach(l => {
+    ctx.lineWidth = fs * 0.18; ctx.strokeStyle = '#000'; ctx.strokeText(l, W / 2, y);
+    ctx.fillStyle = '#fff'; ctx.fillText(l, W / 2, y);
+    y += fs * 1.3;
+  });
+}
+function setRatio(r) { $('#ratio').value = r; [canvas.width, canvas.height] = RATIOS[r]; draw(); }
+$('#ratio').onchange = e => setRatio(e.target.value);
+$('#fit').onchange = () => draw();
+$('#subLang').onchange = () => draw();
+document.fonts.load('600 20px "Noto Sans Devanagari"', 'नमस्ते').then(draw, draw);
+
+// ---------- Subtitles (manual) ----------
+function renderSubs() {
+  const box = $('#subList');
+  box.innerHTML = subs.length ? '' : '<p class="muted">No subtitles. Use 🎙 From speech, add one, or import an .srt file.</p>';
+  subs.sort((a, b) => a.start - b.start || a.lang.localeCompare(b.lang)).forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'sub';
+    row.innerHTML = `<div class="row">
+        <select data-k="lang" aria-label="Language"><option value="en">EN</option><option value="hi">HI</option></select>
+        <input type="number" step="0.1" min="0" data-k="start" aria-label="Start (seconds)" title="Start (s)">
+        <input type="number" step="0.1" min="0" data-k="end" aria-label="End (seconds)" title="End (s)">
+        <button data-a="go" aria-label="Jump to subtitle">⤵</button>
+        <button data-a="del" aria-label="Delete subtitle">✕</button></div>
+      <textarea data-k="text" rows="2" aria-label="Subtitle text"></textarea>`;
+    const ta = row.querySelector('textarea');
+    row.querySelector('[data-k=lang]').value = s.lang;
+    row.querySelector('[data-k=start]').value = s.start.toFixed(1);
+    row.querySelector('[data-k=end]').value = s.end.toFixed(1);
+    ta.value = s.text; ta.lang = s.lang;
+    ta.placeholder = s.lang === 'hi' ? 'हिन्दी में लिखें…' : 'Type English subtitle…';
+    row.oninput = e => {
+      const k = e.target.dataset.k;
+      if (!k) return;
+      s[k] = (k === 'start' || k === 'end') ? +e.target.value : e.target.value;
+      if (k === 'lang') ta.lang = s.lang;
+      if (!playing) draw();
+    };
+    row.onclick = e => {
+      if (e.target.dataset.a === 'del') { subs.splice(subs.indexOf(s), 1); renderSubs(); draw(); }
+      if (e.target.dataset.a === 'go') seek(s.start);
+    };
+    box.append(row);
+  });
+}
+$('#addSub').onclick = () => {
+  const lang = $('#newLang').value;
+  subs.push({start: +t.toFixed(1), end: +(t + 3).toFixed(1), text: lang === 'hi' ? 'नमस्ते' : 'Hello', lang});
+  renderSubs(); draw();
+};
+$('#srtBtn').onclick = () => $('#srt').click();
+$('#srt').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  const parsed = parseSRT(await f.text());
+  if (!parsed.length) return alert('No subtitles found in that file.');
+  const lang = $('#newLang').value;
+  parsed.forEach(s => subs.push({...s, lang}));
+  renderSubs(); draw();
+};
+
+// ---------- Automatic subtitles: Whisper speech-to-text (+ translation), all in the browser ----------
+// Hindi speech: Whisper writes Hindi, then translates the audio itself to English (far better than translating its Hindi text).
+// English speech: Whisper writes English, then a Marian model translates each line to Hindi.
+const WORKER_SRC = `
+import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+let asr, mt;
+self.onmessage = async ({ data: { audio, lang } }) => {
+  const progress = p => p.status === 'progress' && self.postMessage({ status: 'download', file: p.file, progress: p.progress });
+  const listen = async (task, key) => (await asr(audio, { language: lang === 'hi' ? 'hindi' : 'english', task, return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 }))
+    .chunks.map(c => ({ start: c.timestamp[0], end: c.timestamp[1], [key]: c.text.replace(/\\[[^\\]]*\\]|\\([^)]*\\)|♪/g, '').trim() })).filter(s => s[key]); // drop [Music], (applause), ♪ tags
+  try {
+    // shortcut: WASM + 8-bit weights runs everywhere but is slower than WebGPU; switch device when WebGPU is common
+    asr ??= await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', { dtype: 'q8', device: 'wasm', progress_callback: progress });
+    self.postMessage({ status: 'transcribing' });
+    const segs = await listen('transcribe', lang);
+    self.postMessage({ status: 'translating' });
+    if (lang === 'hi') return self.postMessage({ status: 'done', segs: [...segs, ...await listen('translate', 'en')] });
+    mt ??= await pipeline('translation', 'Xenova/opus-mt-en-hi', { dtype: 'q8', progress_callback: progress });
+    for (const s of segs) s.hi = (await mt(s.en))[0].translation_text; // one at a time: batching makes Marian repeat itself
+    self.postMessage({ status: 'done', segs });
+  } catch (e) { self.postMessage({ status: 'error', error: String(e?.message || e) }); }
+};`;
+let worker;
+async function audio16k(file) {
+  const ac = new AudioContext();
+  let decoded;
+  try { decoded = await ac.decodeAudioData(await file.arrayBuffer()); } finally { ac.close(); }
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded; src.connect(off.destination); src.start();
+  return (await off.startRendering()).getChannelData(0);
+}
+async function transcribe(m, label) {
+  let audio;
+  try { audio = await audio16k(m.file); } catch { return []; } // no audio track
+  worker ??= new Worker(URL.createObjectURL(new Blob([WORKER_SRC], {type: 'text/javascript'})), {type: 'module'});
+  const lang = $('#speech').value, other = lang === 'hi' ? 'en' : 'hi';
+  return new Promise((res, rej) => {
+    worker.onerror = () => { worker = null; rej(new Error('Could not load the speech engine. Check your internet connection (needed the first time).')); };
+    worker.onmessage = ({data: d}) => {
+      if (d.status === 'download') busy(`${label}<br>Downloading AI models (first time only, about 300 MB)…<br><small class="muted">${esc(d.file)}</small>`, d.progress / 100);
+      if (d.status === 'transcribing') busy(`${label}<br>Listening to speech…`);
+      if (d.status === 'translating') busy(`${label}<br>Translating to ${other === 'hi' ? 'Hindi' : 'English'}…`);
+      if (d.status === 'error') rej(new Error(d.error));
+      if (d.status === 'done') res(d.segs.map(s => ({...s, end: s.end ?? m.duration})));
+    };
+    worker.postMessage({audio, lang}, [audio.buffer]);
+  });
+}
+async function speechToSubs() {
+  const vids = media.filter(m => m.type === 'video' && timeline.some(c => c.mediaId === m.id));
+  for (const [i, m] of vids.entries()) {
+    if (!m.transcript || m.transcriptLang !== $('#speech').value) {
+      m.transcript = await transcribe(m, `Subtitles: clip ${i + 1} of ${vids.length} (${esc(m.name)})`);
+      m.transcriptLang = $('#speech').value;
+    }
+  }
+  subs.splice(0, subs.length, ...subsFromTranscripts(timeline, getMedia));
+  renderSubs(); renderMedia(); draw();
+}
+$('#autoSubs').onclick = async () => {
+  if (!timeline.length) return alert('Upload clips first.');
+  pause();
+  try { await speechToSubs(); } catch (e) { alert('Subtitle generation failed: ' + e.message); }
+  busy(null);
+};
+
+// ---------- Auto color: measure brightness, contrast, saturation; boost only what is below normal ----------
+const probe = Object.assign(document.createElement('canvas'), {width: 64, height: 36}), pctx = probe.getContext('2d', {willReadFrequently: true});
+function frameStats(el) {
+  pctx.drawImage(el, 0, 0, 64, 36);
+  const d = pctx.getImageData(0, 0, 64, 36).data, n = d.length / 4;
+  let sl = 0, sl2 = 0, ss = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255, l = 0.2126 * r + 0.7152 * g + 0.0722 * b, mx = Math.max(r, g, b);
+    sl += l; sl2 += l * l; ss += mx ? (mx - Math.min(r, g, b)) / mx : 0;
+  }
+  const lum = sl / n;
+  return {lum, std: Math.sqrt(Math.max(0, sl2 / n - lum * lum)), sat: ss / n};
+}
+function gradeFor({lum, std, sat}) {
+  const b = clamp(0.45 / Math.max(lum, 0.05), 1, 1.35), c = clamp(0.2 / Math.max(std, 0.02), 1, 1.3), s = clamp(0.4 / Math.max(sat, 0.05), 1, 1.5);
+  return [b, c, s].every(v => v < 1.03) ? '' : `brightness(${b.toFixed(2)}) contrast(${c.toFixed(2)}) saturate(${s.toFixed(2)})`;
+}
+async function analyzeColor(m) {
+  const stats = [];
+  if (m.type === 'image') stats.push(frameStats(m.el));
+  else for (const f of [0.2, 0.5, 0.8]) { await seekEl(m.el, m.duration * f); stats.push(frameStats(m.el)); }
+  const avg = k => stats.reduce((a, x) => a + x[k], 0) / stats.length;
+  m.grade = gradeFor({lum: avg('lum'), std: avg('std'), sat: avg('sat')});
+}
+
+// ---------- Silence cutter: keep only the parts of each video where someone is speaking ----------
+// Speech regions [start, end] (s) from 16 kHz mono samples, or null when loud/quiet aren't clearly different.
+function speechRegions(x, sr = 16000, pad = 0.25, minGap = 1) {
+  const hop = sr * 0.05, db = [];
+  for (let i = 0; i + hop <= x.length; i += hop) {
+    let e = 0;
+    for (let j = i; j < i + hop; j++) e += x[j] * x[j];
+    db.push(10 * Math.log10(e / hop + 1e-10));
+  }
+  const sorted = [...db].sort((a, b) => a - b), floor = sorted[Math.floor(sorted.length * 0.1)], peak = sorted[Math.floor(sorted.length * 0.98)];
+  if (!db.length || peak - floor < 10) return null; // constant sound or none: cutting would be guesswork
+  const th = floor + 0.35 * (peak - floor), out = [];
+  db.forEach((v, k) => {
+    if (v < th) return;
+    const s = k * 0.05 - pad, e = (k + 1) * 0.05 + pad, last = out[out.length - 1];
+    if (last && s - last[1] < minGap) last[1] = e; else out.push([s, e]);
+  });
+  return out.filter(([s, e]) => e - s >= 0.3 + 2 * pad).map(([s, e]) => [Math.max(0, s), Math.min(x.length / sr, e)]);
+}
+async function cutSilence() {
+  const out = [];
+  for (const c of timeline) {
+    const m = getMedia(c.mediaId);
+    if (m.type === 'video' && m.speech === undefined) m.speech = await audio16k(m.file).then(a => speechRegions(a), () => null);
+    const parts = (m.speech || []).map(([s, e]) => [Math.max(s, c.in), Math.min(e, c.out)]).filter(([s, e]) => e - s > 0.3);
+    if (!parts.length) { out.push(c); continue; } // photo, no audio, or no clear speech in this clip: keep as is
+    parts.forEach(([s, e], k) => out.push({...c, id: k ? ++uid : c.id, in: s, out: e}));
+  }
+  timeline = out;
+}
+
+// ---------- ✨ Auto edit: ratio, colour, silence cuts, motion, transitions, subtitles, music mix, export ----------
+function autoStyle() {
+  // ratio from the orientation that covers most of the running time
+  const n = {'16:9': 0, '9:16': 0, '1:1': 0};
+  timeline.forEach(c => { const m = getMedia(c.mediaId); n[m.w > m.h * 1.1 ? '16:9' : m.h > m.w * 1.1 ? '9:16' : '1:1'] += dur(c); });
+  setRatio(Object.keys(n).reduce((a, b) => n[b] > n[a] ? b : a));
+  $('#fit').value = 'cover';
+  const stillMoves = ['zoomin', 'panleft', 'zoomout', 'panright'];
+  timeline.forEach((c, i) => {
+    c.motion = getMedia(c.mediaId).type === 'image' ? stillMoves[i % 4] : 'zoomin';
+    c.transition = i && timeline[i - 1].mediaId !== c.mediaId ? 'crossfade' : 'none'; // straight jump cut inside one video
+  });
+  renderTimeline();
+}
+$('#autoBtn').onclick = async () => {
+  if (!media.length) return alert('Upload your clips first, then press Auto edit.');
+  pause();
+  if (!timeline.length) media.forEach(m => timeline.push(newClip(m)));
+  busy('Checking colours…');
+  for (const m of media) if (m.grade === undefined) await analyzeColor(m);
+  if ($('#cutSilence').checked) { busy('Cutting silent parts…'); await cutSilence(); }
+  autoStyle();
+  try { await speechToSubs(); }
+  catch (e) { alert('Subtitles were skipped: ' + e.message); }
+  busy(null);
+  await seek(0);
+  if ($('#autoExport').checked) exportVideo();
+};
+
+// ---------- Export ----------
+async function exportVideo() {
+  if (!timeline.length) return alert('Add at least one clip to the sequence first.');
+  const type = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+    .find(x => MediaRecorder.isTypeSupported(x));
+  if (!type) return alert('This browser cannot record video. Try Chrome, Edge or Safari.');
+  await ensureAudio();
+  pause(); await seek(0);
+  const stream = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...audioDest.stream.getAudioTracks()]);
+  const rec = new MediaRecorder(stream, {mimeType: type, videoBitsPerSecond: 8e6});
+  const chunks = [];
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = () => {
+    const blob = new Blob(chunks, {type}), name = 'edited-video.' + (type.startsWith('video/mp4') ? 'mp4' : 'webm'), link = $('#lastExport');
+    download(blob, name);
+    // browsers may block a download that starts without a click, so keep a clickable link to the result
+    if (link.href) URL.revokeObjectURL(link.href);
+    Object.assign(link, {href: URL.createObjectURL(blob), download: name, hidden: false});
+    busy(null);
+  };
+  busy('Exporting… the video plays through once in real time.<br>Keep this window visible until the download starts.');
+  onEnd = () => { onEnd = null; rec.stop(); };
+  rec.start(250);
+  play();
+}
+$('#export').onclick = exportVideo;
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+// ---------- Project file (.vedit): "VEDT" + uint32 JSON length + JSON + raw media bytes ----------
+const MAGIC = 0x56454454;
+$('#saveBtn').onclick = () => {
+  const files = [...media.map(m => m.file), ...(music ? [music.file] : [])];
+  const meta = {
+    v: 1,
+    settings: {ratio: $('#ratio').value, fit: $('#fit').value, subLang: $('#subLang').value, speech: $('#speech').value, musicVol: $('#musicVol').value},
+    media: media.map(m => ({id: m.id, name: m.name, mime: m.file.type, size: m.file.size, transcript: m.transcript, transcriptLang: m.transcriptLang, grade: m.grade})),
+    music: music && {name: music.name, mime: music.file.type, size: music.file.size},
+    timeline, subs,
+  };
+  const json = new TextEncoder().encode(JSON.stringify(meta));
+  const head = new DataView(new ArrayBuffer(8));
+  head.setUint32(0, MAGIC); head.setUint32(4, json.length);
+  download(new Blob([head, json, ...files]), 'my-project.vedit');
+};
+$('#openBtn').onclick = () => $('#projFile').click();
+$('#projFile').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const head = new DataView(await f.slice(0, 8).arrayBuffer());
+    if (f.size < 8 || head.getUint32(0) !== MAGIC) throw new Error('This is not a project file.');
+    const len = head.getUint32(4), meta = JSON.parse(await f.slice(8, 8 + len).text());
+    pause(); busy('Opening project…');
+    media.forEach(m => m.type === 'video' && m.el.pause());
+    media.length = 0; timeline = []; subs.length = 0; setMusic(null);
+    let off = 8 + len;
+    for (const m of meta.media) {
+      const added = await addMedia(new File([f.slice(off, off + m.size)], m.name, {type: m.mime}), {id: m.id, transcript: m.transcript, toTimeline: false});
+      if (added) Object.assign(added, {transcriptLang: m.transcriptLang, grade: m.grade});
+      off += m.size;
+    }
+    if (meta.music) setMusic(new File([f.slice(off, off + meta.music.size)], meta.music.name, {type: meta.music.mime}));
+    timeline = meta.timeline.filter(c => getMedia(c.mediaId));
+    subs.push(...meta.subs);
+    uid = Math.max(0, ...media.map(m => m.id), ...timeline.map(c => c.id));
+    const s = meta.settings;
+    $('#fit').value = s.fit; $('#subLang').value = s.subLang; $('#speech').value = s.speech; $('#musicVol').value = s.musicVol;
+    setRatio(s.ratio);
+    renderMedia(); renderTimeline(); renderSubs(); await seek(0);
+  } catch (err) { alert('Could not open project: ' + err.message); }
+  busy(null);
+};
+
+// ---------- Install as an app (PWA) ----------
+if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
+let installEvt;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#installBtn').hidden = false; });
+$('#installBtn').onclick = () => installEvt?.prompt();
+
+// ---------- Self-check (failures show in the devtools console) ----------
+(() => {
+  const s = parseSRT('﻿1\r\n00:00:01,500 --> 00:00:03,000\r\nनमस्ते <i>दुनिया</i>\r\n\r\n2\n00:01.000 --> 00:02.000 align:start\nHi\n\n');
+  console.assert(s.length === 2 && s[0].start === 1.5 && s[0].end === 3 && s[0].text === 'नमस्ते दुनिया' && s[1].start === 1 && s[1].end === 2, 'parseSRT', s);
+  const tl = [{in: 0, out: 2, mediaId: 1}, {in: 5, out: 6, mediaId: 2}];
+  const h = clipAt(tl, 2.5);
+  console.assert(h.i === 1 && h.start === 2 && Math.abs(h.local - 0.5) < 1e-9, 'clipAt middle', h);
+  console.assert(clipAt(tl, 0).i === 0 && clipAt(tl, 99).i === 1 && clipAt(tl, 99).local === 1, 'clipAt edges');
+  const tr = {1: [{start: 1, end: 3, en: 'a', hi: 'अ'}], 2: [{start: 4, end: 5.5, en: 'b', hi: 'ब'}, {start: 7, end: 8, en: 'gone'}]};
+  const out = subsFromTranscripts(tl, id => ({transcript: tr[id]}));
+  // silence cutter: 2 s quiet, 1 s speech, 3 s quiet, 1 s speech, 0.5 s quiet -> two padded regions
+  const sr = 16000, x = new Float32Array(sr * 7.5), noise = (a, b) => { for (let i = a * sr; i < b * sr; i++) x[i] = Math.sin(i * 0.3) * 0.3; };
+  noise(2, 3); noise(6, 7);
+  const r = speechRegions(x).map(([a, b]) => [+a.toFixed(2), +b.toFixed(2)]);
+  console.assert(JSON.stringify(r) === '[[1.75,3.25],[5.75,7.25]]', 'speechRegions', r);
+  console.assert(speechRegions(new Float32Array(sr * 3).fill(0.2)) === null, 'speechRegions constant sound');
+  // colour: a normal frame is left alone, a dull one is boosted
+  console.assert(gradeFor({lum: 0.5, std: 0.22, sat: 0.45}) === '' && gradeFor({lum: 0.3, std: 0.1, sat: 0.15}).startsWith('brightness(1.35)'), 'gradeFor');
+  console.assert(out.length === 4 && out[0].start === 1 && out[0].end === 2 && out[2].start === 2 && out[2].end === 2.5 && out[3].text === 'ब', 'subsFromTranscripts', out);
+})();
+
+renderMedia(); renderTimeline(); renderSubs(); draw();
+</script>
+</body>
+</html>

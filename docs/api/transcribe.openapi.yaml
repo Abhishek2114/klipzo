@@ -1,0 +1,170 @@
+openapi: 3.1.0
+info:
+  title: Klipzo Transcription API
+  version: 1.0.0
+  summary: Paid-tier speech-to-text (faster-whisper large-v3). The only server API in Klipzo v1.
+  description: |
+    Clients upload 16 kHz mono Opus audio extracted on-device, never video.
+    Audio is deleted as soon as the job finishes; results are deleted after 24 h or on DELETE.
+    Errors use RFC 9457 problem+json. Rate limits: 10 jobs/hour and 300 audio minutes/day per user.
+servers:
+  - url: https://api.klipzo.app
+security:
+  - bearer: []
+paths:
+  /v1/transcriptions:
+    post:
+      operationId: createTranscription
+      summary: Start a transcription job
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio, language]
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: Ogg/Opus, 16 kHz, mono, ≤ 50 MB, ≤ 3 h. Checked by magic bytes (OggS) and decoded duration.
+                language:
+                  type: string
+                  enum: [auto, hi, en]
+                  description: auto handles mixed Hindi/English speech
+                translate:
+                  type: string
+                  enum: [none, en, hi]
+                  default: none
+                  description: Also return segments translated into this language
+                roman:
+                  type: boolean
+                  default: false
+                  description: Add a Hinglish (Roman Hindi) form to Hindi segments (IndicXlit)
+                wordTimestamps:
+                  type: boolean
+                  default: true
+                dictionary:
+                  type: string
+                  description: JSON array of {from, to} replacements applied after transcription (names, brands)
+                  maxLength: 20000
+      responses:
+        '202':
+          description: Accepted
+          headers:
+            Location: { schema: { type: string }, description: URL of the job }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '400': { $ref: '#/components/responses/Problem' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /v1/transcriptions/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[A-Za-z0-9_-]{8,40}$' }
+    get:
+      operationId: getTranscription
+      summary: Job status and, when done, the result
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteTranscription
+      summary: Delete the job and its result now
+      responses:
+        '204': { description: Deleted }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/health:
+    get:
+      operationId: health
+      summary: Liveness and readiness
+      security: []
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, modelLoaded]
+                properties:
+                  status: { type: string, enum: [ok, degraded] }
+                  modelLoaded: { type: boolean }
+                  gpuMemoryFreeMb: { type: integer }
+                  queueLength: { type: integer }
+        '503': { $ref: '#/components/responses/Problem' }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Token issued by the licence/payment provider to paid users
+  responses:
+    Problem:
+      description: Error (RFC 9457)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        retryAfterSec: { type: integer, description: Present on 429 and 503 }
+    Word:
+      type: object
+      required: [text, start, end]
+      properties:
+        text: { type: string }
+        start: { type: number, description: Seconds from start of uploaded audio }
+        end: { type: number }
+        conf: { type: number, minimum: 0, maximum: 1 }
+    Segment:
+      type: object
+      required: [start, end, text]
+      properties:
+        start: { type: number }
+        end: { type: number }
+        text: { type: string, description: 'Non-speech tags such as [Music] are removed' }
+        roman: { type: string, description: Hinglish form, when requested }
+        words:
+          type: array
+          items: { $ref: '#/components/schemas/Word' }
+    Job:
+      type: object
+      required: [id, status, createdAt]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [queued, running, done, failed] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        language: { type: string, enum: [hi, en], description: Detected or requested language }
+        durationSec: { type: number }
+        segments:
+          type: array
+          items: { $ref: '#/components/schemas/Segment' }
+        translation:
+          type: object
+          required: [language, segments]
+          properties:
+            language: { type: string, enum: [en, hi] }
+            segments:
+              type: array
+              items: { $ref: '#/components/schemas/Segment' }
+        error: { $ref: '#/components/schemas/Problem' }
