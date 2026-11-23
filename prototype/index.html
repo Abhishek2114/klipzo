@@ -49,6 +49,11 @@ canvas{display:block;max-width:100%;max-height:60vh;width:auto;height:auto}
 footer{padding:0 16px 16px;font-size:13px}
 #busy{position:fixed;inset:0;background:#000d;display:grid;place-items:center;z-index:9;text-align:center;padding:16px}
 #busy[hidden]{display:none}
+#cancelBtn{margin-top:14px}
+#note{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10;background:var(--panel);border:1px solid var(--accent);border-radius:8px;padding:10px 16px;max-width:min(560px,calc(100vw - 32px));box-shadow:0 6px 24px #0008;cursor:pointer}
+#note[hidden]{display:none}
+a#lastExport{background:var(--accent);color:#fff;border-radius:6px;padding:6px 10px;text-decoration:none}
+@media (pointer:coarse){.handle{display:none}}
 #busyMsg{font-size:18px;max-width:520px;line-height:1.5}
 progress{width:min(420px,80vw);margin-top:12px}
 </style>
@@ -67,7 +72,7 @@ progress{width:min(420px,80vw);margin-top:12px}
   <label><input type="checkbox" id="autoExport" checked> Export when done</label>
   <button class="magic" id="autoBtn">✨ Auto edit</button>
   <button class="primary" id="export">Export video</button>
-  <a id="lastExport" class="primary" hidden style="color:var(--accent)">⬇ Download last export</a>
+  <a id="lastExport" hidden>⬇ Download last export</a>
   <button id="installBtn" hidden>Install app</button>
 </header>
 
@@ -118,12 +123,13 @@ progress{width:min(420px,80vw);margin-top:12px}
   </section>
 
   <section id="seqPanel">
-    <h2>2. Sequence (drag ⠿ to reorder)</h2>
+    <h2>2. Sequence (drag ⠿ or use ◀ ▶ to reorder)</h2>
     <div id="timeline"></div>
   </section>
 </main>
 <footer class="muted">Klipzo Beta · Everything runs in your browser: your videos are never uploaded. Works best in Chrome or Edge on a laptop. Subtitles are AI drafts (Hindi especially): read them before you export. They download about 300&nbsp;MB of AI models the first time.</footer>
-<div id="busy" hidden><div><div id="busyMsg"></div><progress id="busyBar" hidden></progress></div></div>
+<div id="busy" hidden><div><div id="busyMsg"></div><progress id="busyBar" hidden></progress><div><button id="cancelBtn" hidden>Cancel</button></div></div></div>
+<div id="note" role="status" aria-live="polite" hidden></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -147,10 +153,21 @@ const total = () => timeline.reduce((s, c) => s + dur(c), 0);
 const getMedia = id => media.find(m => m.id === id);
 const clipStart = i => timeline.slice(0, i).reduce((s, c) => s + dur(c), 0);
 const newClip = m => ({id: ++uid, mediaId: m.id, in: 0, out: m.type === 'image' ? 3 : m.duration, motion: 'none', transition: 'none'});
-const busy = (msg, prog) => {
+// onCancel, when given, shows a Cancel button: long jobs (model download, subtitles, export) must never lock the screen.
+let cancelBusy = null;
+const CANCELLED = 'Cancelled';
+const busy = (msg, prog, onCancel) => {
   $('#busy').hidden = !msg; $('#busyMsg').innerHTML = msg || '';
   $('#busyBar').hidden = prog == null; if (prog != null) $('#busyBar').value = prog;
+  cancelBusy = msg ? onCancel || null : null; $('#cancelBtn').hidden = !cancelBusy;
 };
+// On-page message instead of alert(): in-app browsers (WhatsApp, Instagram) often block alert().
+let noteTimer;
+function notify(msg) {
+  const n = $('#note');
+  n.textContent = msg; n.hidden = false;
+  clearTimeout(noteTimer); noteTimer = setTimeout(() => n.hidden = true, 7000);
+}
 
 // Which clip is at global time `time`: {i, start, local}
 function clipAt(tl, time) {
@@ -232,7 +249,7 @@ function musicGain() {
 function addMedia(f, {id, transcript, toTimeline = true} = {}) {
   return new Promise(res => {
     const type = f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'image' : null;
-    if (!type) { alert(`${f.name} is not a video or image.`); return res(); }
+    if (!type) { notify(`${f.name} is not a video or image.`); return res(); }
     const url = URL.createObjectURL(f);
     const done = (el, duration, w, h) => {
       const m = {id: id ?? ++uid, name: f.name, type, file: f, el, duration, w, h, transcript};
@@ -240,7 +257,7 @@ function addMedia(f, {id, transcript, toTimeline = true} = {}) {
       if (toTimeline) timeline.push(newClip(m));
       renderMedia(); renderTimeline(); res(m);
     };
-    const fail = () => { alert(`This browser can't open ${f.name}. Try MP4 (H.264), WebM, JPG or PNG.`); res(); };
+    const fail = () => { notify(`This browser can't open ${f.name}. Try MP4 (H.264), WebM, JPG or PNG.`); res(); };
     if (type === 'image') {
       const img = new Image();
       img.onload = () => done(img, 60, img.naturalWidth, img.naturalHeight); // images can last up to 60 s
@@ -284,7 +301,7 @@ function setMusic(f) {
   if (music) { music.el.pause(); music.gain?.disconnect(); }
   music = null;
   if (f) {
-    if (!f.type.startsWith('audio/')) return alert(`${f.name} is not an audio file.`);
+    if (!f.type.startsWith('audio/')) return notify(`${f.name} is not an audio file.`);
     const el = new Audio(URL.createObjectURL(f));
     el.loop = true;
     music = {name: f.name, file: f, el};
@@ -349,9 +366,9 @@ function renderTimeline() {
 }
 
 $('#splitBtn').onclick = () => {
-  if (!timeline.length) return;
+  if (!timeline.length) return notify('Upload clips first, then move the playhead to where you want to cut.');
   const h = clipAt(timeline, t), c = timeline[h.i];
-  if (h.local < 0.1 || dur(c) - h.local < 0.1) return alert('Move the playhead inside a clip first.');
+  if (h.local < 0.1 || dur(c) - h.local < 0.1) return notify('Move the playhead inside a clip first.');
   edit(() => {
     const cut = c.in + h.local, m = getMedia(c.mediaId);
     // an image has no source time: split it into two shorter stills
@@ -427,10 +444,13 @@ async function seek(time) {
   else { await startClip(h.i, h.local); draw(); }
   updateUI();
 }
-$('#playBtn').onclick = () => playing ? pause() : play();
+$('#cancelBtn').onclick = () => cancelBusy?.();
+$('#note').onclick = () => $('#note').hidden = true;
+const togglePlay = () => playing ? pause() : timeline.length ? play() : notify('Upload clips first, then press Play.');
+$('#playBtn').onclick = togglePlay;
 $('#scrub').oninput = e => seek(+e.target.value);
 document.onkeydown = e => {
-  if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); playing ? pause() : play(); }
+  if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); togglePlay(); }
 };
 function updateUI() {
   $('#playBtn').textContent = playing ? '❚❚ Pause' : '▶ Play';
@@ -572,7 +592,7 @@ $('#srt').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
   const parsed = parseSRT(await f.text());
-  if (!parsed.length) return alert('No subtitles found in that file.');
+  if (!parsed.length) return notify('No subtitles found in that file.');
   const lang = $('#newLang').value;
   parsed.forEach(s => subs.push({...s, lang}));
   renderSubs(); draw();
@@ -616,11 +636,13 @@ async function transcribe(m, label) {
   worker ??= new Worker(URL.createObjectURL(new Blob([WORKER_SRC], {type: 'text/javascript'})), {type: 'module'});
   const lang = $('#speech').value, other = lang === 'hi' ? 'en' : 'hi';
   return new Promise((res, rej) => {
+    const cancel = () => { worker.terminate(); worker = null; rej(new Error(CANCELLED)); };
+    busy(`${label}<br>Starting…`, null, cancel);
     worker.onerror = () => { worker = null; rej(new Error('Could not load the speech engine. Check your internet connection (needed the first time).')); };
     worker.onmessage = ({data: d}) => {
-      if (d.status === 'download') busy(`${label}<br>Downloading AI models (first time only, about 300 MB)…<br><small class="muted">${esc(d.file)}</small>`, d.progress / 100);
-      if (d.status === 'transcribing') busy(`${label}<br>Listening to speech…`);
-      if (d.status === 'translating') busy(`${label}<br>Translating to ${other === 'hi' ? 'Hindi' : 'English'}…`);
+      if (d.status === 'download') busy(`${label}<br>Downloading AI models (first time only, about 300 MB)…<br><small class="muted">${esc(d.file)}</small>`, d.progress / 100, cancel);
+      if (d.status === 'transcribing') busy(`${label}<br>Listening to speech…`, null, cancel);
+      if (d.status === 'translating') busy(`${label}<br>Translating to ${other === 'hi' ? 'Hindi' : 'English'}…`, null, cancel);
       if (d.status === 'error') rej(new Error(d.error));
       if (d.status === 'done') res(d.segs.map(s => ({...s, end: s.end ?? m.duration})));
     };
@@ -639,9 +661,9 @@ async function speechToSubs() {
   renderSubs(); renderMedia(); draw();
 }
 $('#autoSubs').onclick = async () => {
-  if (!timeline.length) return alert('Upload clips first.');
+  if (!timeline.length) return notify('Upload clips first.');
   pause();
-  try { await speechToSubs(); } catch (e) { alert('Subtitle generation failed: ' + e.message); }
+  try { await speechToSubs(); } catch (e) { if (e.message !== CANCELLED) notify('Subtitle generation failed: ' + e.message); }
   busy(null);
 };
 
@@ -716,26 +738,31 @@ function autoStyle() {
   renderTimeline();
 }
 $('#autoBtn').onclick = async () => {
-  if (!media.length) return alert('Upload your clips first, then press Auto edit.');
+  if (!media.length) return notify('Upload your clips first, then press Auto edit.');
   pause();
   if (!timeline.length) media.forEach(m => timeline.push(newClip(m)));
-  busy('Checking colours…');
-  for (const m of media) if (m.grade === undefined) await analyzeColor(m);
-  if ($('#cutSilence').checked) { busy('Cutting silent parts…'); await cutSilence(); }
+  let stopped = false;
+  const stop = () => { stopped = true; busy('Stopping…'); };
+  busy('Checking colours…', null, stop);
+  for (const m of media) if (!stopped && m.grade === undefined) await analyzeColor(m);
+  if (!stopped && $('#cutSilence').checked) { busy('Cutting silent parts…', null, stop); await cutSilence(); }
   autoStyle();
-  try { await speechToSubs(); }
-  catch (e) { alert('Subtitles were skipped: ' + e.message); }
+  if (!stopped) {
+    try { await speechToSubs(); }
+    catch (e) { if (e.message === CANCELLED) stopped = true; else notify('Subtitles were skipped: ' + e.message); }
+  }
   busy(null);
   await seek(0);
+  if (stopped) return notify('Auto edit stopped. Your clips are kept; you can edit them or press Auto edit again.');
   if ($('#autoExport').checked) exportVideo();
 };
 
 // ---------- Export ----------
 async function exportVideo() {
-  if (!timeline.length) return alert('Add at least one clip to the sequence first.');
+  if (!timeline.length) return notify('Add at least one clip to the sequence first.');
   const type = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
     .find(x => MediaRecorder.isTypeSupported(x));
-  if (!type) return alert('This browser cannot record video. Try Chrome, Edge or Safari.');
+  if (!type) return notify('This browser cannot record video. Try Chrome, Edge or Safari.');
   await ensureAudio();
   pause(); await seek(0);
   const stream = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...audioDest.stream.getAudioTracks()]);
@@ -750,7 +777,10 @@ async function exportVideo() {
     Object.assign(link, {href: URL.createObjectURL(blob), download: name, hidden: false});
     busy(null);
   };
-  busy('Exporting… the video plays through once in real time.<br>Keep this window visible until the download starts.');
+  busy('Exporting… the video plays through once in real time.<br>Keep this window visible until the download starts.', null, () => {
+    onEnd = null; rec.onstop = null; rec.stop(); pause(); busy(null);
+    notify('Export cancelled.');
+  });
   onEnd = () => { onEnd = null; rec.stop(); };
   rec.start(250);
   play();
@@ -765,6 +795,7 @@ function download(blob, name) {
 // ---------- Project file (.vedit): "VEDT" + uint32 JSON length + JSON + raw media bytes ----------
 const MAGIC = 0x56454454;
 $('#saveBtn').onclick = () => {
+  if (!media.length) return notify('Nothing to save yet: upload clips first.');
   const files = [...media.map(m => m.file), ...(music ? [music.file] : [])];
   const meta = {
     v: 1,
@@ -803,7 +834,7 @@ $('#projFile').onchange = async e => {
     $('#fit').value = s.fit; $('#subLang').value = s.subLang; $('#speech').value = s.speech; $('#musicVol').value = s.musicVol;
     setRatio(s.ratio);
     renderMedia(); renderTimeline(); renderSubs(); await seek(0);
-  } catch (err) { alert('Could not open project: ' + err.message); }
+  } catch (err) { notify('Could not open project: ' + err.message); }
   busy(null);
 };
 
