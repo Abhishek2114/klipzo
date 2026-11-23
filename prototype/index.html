@@ -36,7 +36,7 @@ button.magic{background:var(--magic);border-color:var(--magic);color:#fff;font-w
 canvas{display:block;max-width:100%;max-height:60vh;width:auto;height:auto}
 #scrub{width:100%;padding:0}
 #timeline{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
-.card{flex:1 0 180px;background:#23232a;border:1px solid var(--line);border-radius:8px;padding:8px}
+.card{cursor:pointer;flex:1 0 180px;background:#23232a;border:1px solid var(--line);border-radius:8px;padding:8px}
 .card.active{border-color:var(--accent)}
 .card.over{outline:2px dashed var(--accent)}
 .card b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
@@ -68,7 +68,7 @@ progress{width:min(420px,80vw);margin-top:12px}
   <input type="file" id="projFile" accept=".vedit" hidden>
   <label>Ratio <select id="ratio" data-undo><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option><option>4:3</option></select></label>
   <label>Fit <select id="fit" data-undo><option value="cover">Fill (crop)</option><option value="contain">Fit (bars)</option></select></label>
-  <label>Speech <select id="speech"><option value="hi">Hindi</option><option value="en">English</option></select></label>
+  <label title="Which language people speak in your clips; Auto-detect lets the AI decide for each clip">Speech <select id="speech"><option value="auto">Auto-detect</option><option value="hi">Hindi</option><option value="en">English</option></select></label>
   <label title="Brighten and boost colour only on clips that look dull"><input type="checkbox" id="autoColor" checked> Auto color</label>
   <label title="Auto edit removes silent parts before, after and between speech"><input type="checkbox" id="cutSilence" checked> Cut silences</label>
   <label><input type="checkbox" id="autoExport" checked> Export when done</label>
@@ -110,6 +110,7 @@ progress{width:min(420px,80vw);margin-top:12px}
       <span id="saveState" class="muted"></span>
       <button id="splitBtn" style="margin-left:auto">✂ Split at playhead</button>
     </div>
+    <p class="muted" style="margin:0;font-size:13px">Shortcuts: Space play/pause · S split · ←/→ move 1 s (Shift: 0.1 s) · Ctrl/⌘+Z undo · click a clip to jump to it</p>
   </section>
 
   <section>
@@ -122,6 +123,7 @@ progress{width:min(420px,80vw);margin-top:12px}
       <select id="newLang" aria-label="Language for new subtitles"><option value="en">English</option><option value="hi">हिन्दी (Hindi)</option></select>
       <button id="addSub">+ Add</button>
       <button id="srtBtn">Import .srt</button>
+      <button id="srtOut" title="Download the subtitles in the language picked on the left, for YouTube or Instagram">⬇ Export .srt</button>
       <input type="file" id="srt" accept=".srt,.vtt" hidden>
     </div>
     <div id="subList"></div>
@@ -204,12 +206,36 @@ function subsFromTranscripts(tl, mediaById) {
     for (const seg of mediaById(c.mediaId)?.transcript || []) {
       const s = Math.max(seg.start, c.in), e = Math.min(seg.end, c.out);
       if (e - s < 0.2) continue;
-      for (const lang of ['en', 'hi']) if (seg[lang]) out.push({start: start + s - c.in, end: start + e - c.in, text: seg[lang], lang});
+      for (const lang of ['en', 'hi']) if (seg[lang]) out.push(...splitLine({start: start + s - c.in, end: start + e - c.in, text: seg[lang], lang, auto: true}));
     }
     start += c.out - c.in;
   }
   return out;
 }
+
+// Long sentences become several short subtitles (readable on a phone); time is shared out by text length.
+function splitLine(sub, max = 42) {
+  if (sub.text.length <= max) return [sub];
+  const parts = [];
+  let cur = '';
+  for (const w of sub.text.split(/\s+/)) {
+    if (cur && (cur + ' ' + w).length > max) { parts.push(cur); cur = w; } else cur = cur ? cur + ' ' + w : w;
+  }
+  if (cur) parts.push(cur);
+  const chars = parts.reduce((a, x) => a + x.length, 0);
+  let at = sub.start;
+  return parts.map((text, i) => {
+    const end = i === parts.length - 1 ? sub.end : at + (sub.end - sub.start) * text.length / chars;
+    const piece = {...sub, start: at, end, text};
+    at = end;
+    return piece;
+  });
+}
+const srtTime = sec => {
+  const ms = Math.round(sec * 1000), p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
+};
+const toSRT = list => list.map((x, i) => `${i + 1}\n${srtTime(x.start)} --> ${srtTime(x.end)}\n${x.text}\n`).join('\n');
 
 // ---------- Audio (routed through WebAudio so export records it) ----------
 let audioCtx, audioDest;
@@ -384,6 +410,7 @@ function renderTimeline() {
       const a = e.target.dataset.a;
       if (a === 'del') edit(() => timeline.splice(i, 1));
       else if (a) { const j = i + +a; if (j >= 0 && j < timeline.length) edit(() => [timeline[i], timeline[j]] = [timeline[j], timeline[i]]); }
+      else if (!/INPUT|SELECT|OPTION|BUTTON|TEXTAREA/.test(e.target.tagName)) seek(clipStart(i)); // click a clip to jump to it
     };
     card.querySelector('.handle').ondragstart = e => { dragIdx = i; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); };
     card.ondragover = e => { if (dragIdx < 0) return; e.preventDefault(); card.classList.add('over'); };
@@ -487,6 +514,10 @@ $('#playBtn').onclick = togglePlay;
 $('#scrub').oninput = e => seek(+e.target.value);
 document.onkeydown = e => {
   if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); togglePlay(); }
+  if (!/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.code === 'KeyS') { e.preventDefault(); $('#splitBtn').click(); }
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { e.preventDefault(); seek(t + (e.code === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 0.1 : 1)); }
+  }
   // text fields keep their own undo for typing
   if ((e.metaKey || e.ctrlKey) && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
     const k = e.key.toLowerCase();
@@ -615,6 +646,7 @@ function renderSubs() {
       const k = e.target.dataset.k;
       if (!k) return;
       s[k] = (k === 'start' || k === 'end') ? +e.target.value : e.target.value;
+      if (s.auto) { delete s.auto; s.edited = true; } // a corrected AI line: keep it, and don't add the AI's version again
       if (k === 'lang') ta.lang = s.lang;
       if (!playing) draw();
     };
@@ -632,6 +664,11 @@ $('#addSub').onclick = () => {
   renderSubs(); draw();
 };
 $('#srtBtn').onclick = () => $('#srt').click();
+$('#srtOut').onclick = () => {
+  const lang = $('#newLang').value, list = subs.filter(x => x.lang === lang).sort((a, b) => a.start - b.start);
+  if (!list.length) return notify(`No ${lang === 'hi' ? 'Hindi' : 'English'} subtitles yet. Pick the other language on the left, or make subtitles first.`);
+  download(new Blob(['\uFEFF' + toSRT(list)], {type: 'application/x-subrip'}), `klipzo-subtitles-${lang}.srt`);
+};
 $('#srt').onchange = async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
@@ -647,7 +684,7 @@ $('#srt').onchange = async e => {
 // Hindi speech: Whisper writes Hindi, then translates the audio itself to English (far better than translating its Hindi text).
 // English speech: Whisper writes English, then a Marian model translates each line to Hindi.
 const WORKER_SRC = `
-import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+import { pipeline, Tensor } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 let asr, mt;
 const SR = 16000, HOP = 800;
 // Level (dB) of the 50 ms frame starting at sample i.
@@ -670,10 +707,19 @@ const pieces = a => {
   }
   return out;
 };
-self.onmessage = async ({ data: { audio, lang } }) => {
+// Spoken language, Hindi or English: Whisper's own language guess (its first output token), limited to the two we support.
+// Told nothing, transformers.js assumes English and silently translates Hindi, so this check is needed.
+const detect = async a => {
+  const id = t => asr.tokenizer.model.tokens_to_ids.get(t);
+  const { input_features } = await asr.processor(a);
+  const { logits } = await asr.model({ input_features, decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(id('<|startoftranscript|>'))]), [1, 1]) });
+  const score = t => logits.data[id(t)];
+  return Math.max(score('<|hi|>'), score('<|ur|>')) > score('<|en|>') ? 'hi' : 'en'; // Urdu = same spoken Hindustani
+};
+self.onmessage = async ({ data: { audio, lang, needs } }) => {
   const progress = p => p.status === 'progress' && self.postMessage({ status: 'download', file: p.file, progress: p.progress });
-  const parts = pieces(audio), passes = lang === 'hi' ? 2 : 1, total = Math.max(1, parts.length * passes);
-  let done = 0, t0 = 0;
+  const parts = pieces(audio), want = l => needs.includes(l);
+  let done = 0, t0 = 0, total = 1;
   const listen = async (task, key) => {
     const segs = [];
     for (const [a, b] of parts) {
@@ -690,14 +736,27 @@ self.onmessage = async ({ data: { audio, lang } }) => {
   try {
     // shortcut: WASM + 8-bit weights runs everywhere but is slower than WebGPU; switch device when WebGPU is common
     asr ??= await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', { dtype: 'q8', device: 'wasm', progress_callback: progress });
-    self.postMessage({ status: 'listening', task: 'transcribe', pct: 0 });
+    if (lang === 'auto') {
+      self.postMessage({ status: 'listening', task: 'detect', pct: 0 });
+      lang = parts.length ? await detect(audio.subarray(parts[0][0], parts[0][1])) : 'en';
+    }
+    // Only the passes the shown subtitles need: Hindi speech showing only Hindi skips the English pass (about half the time).
+    total = Math.max(1, parts.length * (lang === 'hi' ? (want('hi') ? 1 : 0) + (want('en') ? 1 : 0) : 1));
+    self.postMessage({ status: 'listening', task: 'transcribe', lang, pct: 0 });
     t0 = Date.now();
-    const segs = await listen('transcribe', lang);
-    if (lang === 'hi') return self.postMessage({ status: 'done', segs: [...segs, ...await listen('translate', 'en')] });
-    self.postMessage({ status: 'translating' });
-    mt ??= await pipeline('translation', 'Xenova/opus-mt-en-hi', { dtype: 'q8', progress_callback: progress });
-    for (const s of segs) s.hi = (await mt(s.en))[0].translation_text; // one at a time: batching makes Marian repeat itself
-    self.postMessage({ status: 'done', segs });
+    const segs = [];
+    if (lang === 'hi') {
+      if (want('hi')) segs.push(...await listen('transcribe', 'hi'));
+      if (want('en')) segs.push(...await listen('translate', 'en'));
+      return self.postMessage({ status: 'done', segs, lang, has: needs });
+    }
+    segs.push(...await listen('transcribe', 'en'));
+    if (want('hi')) {
+      self.postMessage({ status: 'translating' });
+      mt ??= await pipeline('translation', 'Xenova/opus-mt-en-hi', { dtype: 'q8', progress_callback: progress });
+      for (const s of segs) s.hi = (await mt(s.en))[0].translation_text; // one at a time: batching makes Marian repeat itself
+    }
+    self.postMessage({ status: 'done', segs, lang, has: want('hi') ? ['en', 'hi'] : ['en'] });
   } catch (e) { self.postMessage({ status: 'error', error: String(e?.message || e) }); }
 };`;
 let worker;
@@ -710,11 +769,10 @@ async function audio16k(file) {
   src.buffer = decoded; src.connect(off.destination); src.start();
   return (await off.startRendering()).getChannelData(0);
 }
-async function transcribe(m, label) {
+async function transcribe(m, label, lang, needs) {
   let audio;
-  try { audio = await audio16k(m.file); } catch { return []; } // no audio track
+  try { audio = await audio16k(m.file); } catch { return {segs: [], lang: null, has: ['hi', 'en']}; } // no audio track
   worker ??= new Worker(URL.createObjectURL(new Blob([WORKER_SRC], {type: 'text/javascript'})), {type: 'module'});
-  const lang = $('#speech').value, other = lang === 'hi' ? 'en' : 'hi';
   return new Promise((res, rej) => {
     const cancel = () => { worker.terminate(); worker = null; rej(new Error(CANCELLED)); };
     busy(`${label}<br>Starting…`, null, cancel);
@@ -723,24 +781,30 @@ async function transcribe(m, label) {
       if (d.status === 'download') busy(`${label}<br>Downloading AI models (first time only, about 300 MB)…<br><small class="muted">${esc(d.file)}</small>`, d.progress / 100, cancel);
       if (d.status === 'listening') {
         const left = d.eta >= 60 ? `about ${Math.round(d.eta / 60)} min left` : d.eta > 0 ? `about ${d.eta} s left` : d.pct ? '' : 'working out the time…';
-        busy(`${label}<br>${d.task === 'translate' ? 'Listening again for English subtitles' : 'Listening to speech'}… ${d.pct}%${left ? ' · ' + left : ''}`, d.pct / 100, cancel);
+        if (d.lang) label += ` · ${d.lang === 'hi' ? 'Hindi' : 'English'} speech`;
+        const what = d.task === 'detect' ? 'Working out the spoken language' : d.task === 'translate' ? 'Listening again for English subtitles' : 'Listening to speech';
+        busy(`${label}<br>${what}… ${d.task === 'detect' ? '' : d.pct + '%'}${left && d.task !== 'detect' ? ' · ' + left : ''}`, d.task === 'detect' ? null : d.pct / 100, cancel);
       }
-      if (d.status === 'translating') busy(`${label}<br>Translating to ${other === 'hi' ? 'Hindi' : 'English'}…`, null, cancel);
+      if (d.status === 'translating') busy(`${label}<br>Translating to Hindi…`, null, cancel);
       if (d.status === 'error') rej(new Error(d.error));
-      if (d.status === 'done') res(d.segs.map(s => ({...s, end: s.end ?? m.duration})));
+      if (d.status === 'done') res({segs: d.segs.map(s => ({...s, end: s.end ?? m.duration})), lang: d.lang, has: d.has});
     };
-    worker.postMessage({audio, lang}, [audio.buffer]);
+    worker.postMessage({audio, lang, needs}, [audio.buffer]);
   });
 }
 async function speechToSubs() {
+  const setting = $('#speech').value, needs = {hi: ['hi'], en: ['en']}[$('#subLang').value] ?? ['hi', 'en'];
   const vids = media.filter(m => m.type === 'video' && timeline.some(c => c.mediaId === m.id));
   for (const [i, m] of vids.entries()) {
-    if (!m.transcript || m.transcriptLang !== $('#speech').value) {
-      m.transcript = await transcribe(m, `Subtitles: clip ${i + 1} of ${vids.length} (${esc(m.name)})`);
-      m.transcriptLang = $('#speech').value;
+    if (!m.transcript || m.speechSetting !== setting || needs.some(l => !m.transcriptHas?.includes(l))) {
+      const r = await transcribe(m, `Subtitles: clip ${i + 1} of ${vids.length} (${esc(m.name)})`, setting, needs);
+      Object.assign(m, {transcript: r.segs, transcriptLang: r.lang, transcriptHas: r.has, speechSetting: setting});
     }
   }
-  subs.splice(0, subs.length, ...subsFromTranscripts(timeline, getMedia));
+  // Keep subtitles a person typed or corrected; replace only machine-made ones, minus any a person already corrected.
+  const kept = subs.filter(x => !x.auto);
+  const made = subsFromTranscripts(timeline, getMedia).filter(g => !kept.some(k => k.edited && k.lang === g.lang && k.start < g.end && g.start < k.end));
+  subs.splice(0, subs.length, ...kept, ...made);
   renderSubs(); renderMedia(); draw();
 }
 $('#autoSubs').onclick = async () => {
@@ -884,11 +948,11 @@ const MAGIC = 0x56454454;
 const projectMeta = () => ({
   v: 1,
   settings: {ratio: $('#ratio').value, fit: $('#fit').value, subLang: $('#subLang').value, speech: $('#speech').value, musicVol: $('#musicVol').value},
-  media: media.map(m => ({id: m.id, name: m.name, mime: m.file.type, size: m.file.size, transcript: m.transcript, transcriptLang: m.transcriptLang, grade: m.grade})),
+  media: media.map(m => ({id: m.id, name: m.name, mime: m.file.type, size: m.file.size, transcript: m.transcript, transcriptLang: m.transcriptLang, transcriptHas: m.transcriptHas, speechSetting: m.speechSetting, grade: m.grade})),
   music: music && {name: music.name, mime: music.file.type, size: music.file.size},
   timeline, subs,
 });
-const EMPTY = {settings: {ratio: '16:9', fit: 'cover', subLang: 'both', speech: 'hi', musicVol: '0.5'}, media: [], music: null, timeline: [], subs: []};
+const EMPTY = {settings: {ratio: '16:9', fit: 'cover', subLang: 'both', speech: 'auto', musicVol: '0.5'}, media: [], music: null, timeline: [], subs: []};
 let loading = false;
 // Replace the current project with `meta`; files[i] is media i's file, files[media.length] the music.
 async function loadProjectData(meta, files) {
@@ -899,7 +963,7 @@ async function loadProjectData(meta, files) {
     media.length = 0; timeline = []; subs.length = 0; setMusic(null);
     for (const [i, m] of meta.media.entries()) {
       const added = await addMedia(files[i], {id: m.id, transcript: m.transcript, toTimeline: false});
-      if (added) Object.assign(added, {transcriptLang: m.transcriptLang, grade: m.grade});
+      if (added) Object.assign(added, {transcriptLang: m.transcriptLang, transcriptHas: m.transcriptHas, speechSetting: m.speechSetting, grade: m.grade});
     }
     if (meta.music) setMusic(files[meta.media.length]);
     timeline = meta.timeline.filter(c => getMedia(c.mediaId));
@@ -1038,6 +1102,10 @@ $('#installBtn').onclick = () => installEvt?.prompt();
   console.assert(speechRegions(new Float32Array(sr * 3).fill(0.2)) === null, 'speechRegions constant sound');
   // colour: a normal frame is left alone, a dull one is boosted
   console.assert(gradeFor({lum: 0.5, std: 0.22, sat: 0.45}) === '' && gradeFor({lum: 0.3, std: 0.1, sat: 0.15}).startsWith('brightness(1.35)'), 'gradeFor');
+  const long = splitLine({start: 0, end: 10, text: 'one two three four five six seven eight nine ten eleven twelve thirteen', lang: 'en'}, 20);
+  console.assert(long.length > 1 && long[0].start === 0 && long.at(-1).end === 10 && long.every(x => x.text.length <= 20) && long.map(x => x.text).join(' ') === 'one two three four five six seven eight nine ten eleven twelve thirteen', 'splitLine', long);
+  const back = parseSRT(toSRT([{start: 1.5, end: 3, text: 'नमस्ते'}, {start: 3661.25, end: 3662, text: 'hi'}]));
+  console.assert(back.length === 2 && back[0].start === 1.5 && back[1].start === 3661.25 && back[0].text === 'नमस्ते', 'toSRT round trip', back);
   console.assert(out.length === 4 && out[0].start === 1 && out[0].end === 2 && out[2].start === 2 && out[2].end === 2.5 && out[3].text === 'ब', 'subsFromTranscripts', out);
 })();
 
