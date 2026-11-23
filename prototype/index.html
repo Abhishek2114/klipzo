@@ -22,7 +22,7 @@ section{background:var(--panel);border:1px solid var(--line);border-radius:8px;p
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
 h3{font-size:12px;color:var(--muted);margin:14px 0 8px}
 button,select,input,textarea{background:#26262d;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit}
-button{cursor:pointer} button:hover{border-color:var(--accent)}
+button{cursor:pointer} button:disabled{opacity:.45;cursor:default} button:hover{border-color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.magic{background:var(--magic);border-color:var(--magic);color:#fff;font-weight:600}
 :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
@@ -40,6 +40,7 @@ canvas{display:block;max-width:100%;max-height:60vh;width:auto;height:auto}
 .card.active{border-color:var(--accent)}
 .card.over{outline:2px dashed var(--accent)}
 .card b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.card input.pos{width:52px;text-align:center;font-weight:600}
 .card label{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:6px}
 .card input,.card select{width:100px}
 .handle{cursor:grab;padding:0 4px;user-select:none}
@@ -61,11 +62,12 @@ progress{width:min(420px,80vw);margin-top:12px}
 <body>
 <header>
   <h1>🎬 Klipzo <small class="muted">Beta</small></h1>
+  <button id="newBtn">New project</button>
   <button id="openBtn">Open project</button>
   <button id="saveBtn">Save project</button>
   <input type="file" id="projFile" accept=".vedit" hidden>
-  <label>Ratio <select id="ratio"><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option><option>4:3</option></select></label>
-  <label>Fit <select id="fit"><option value="cover">Fill (crop)</option><option value="contain">Fit (bars)</option></select></label>
+  <label>Ratio <select id="ratio" data-undo><option>16:9</option><option>9:16</option><option>1:1</option><option>4:5</option><option>4:3</option></select></label>
+  <label>Fit <select id="fit" data-undo><option value="cover">Fill (crop)</option><option value="contain">Fit (bars)</option></select></label>
   <label>Speech <select id="speech"><option value="hi">Hindi</option><option value="en">English</option></select></label>
   <label title="Brighten and boost colour only on clips that look dull"><input type="checkbox" id="autoColor" checked> Auto color</label>
   <label title="Auto edit removes silent parts before, after and between speech"><input type="checkbox" id="cutSilence" checked> Cut silences</label>
@@ -103,6 +105,9 @@ progress{width:min(420px,80vw);margin-top:12px}
     <div class="row" style="margin-top:8px">
       <button id="playBtn" class="primary">▶ Play</button>
       <span id="time" class="muted">0:00.0 / 0:00.0</span>
+      <button id="undoBtn" disabled title="Undo (Ctrl/⌘+Z)">↶ Undo</button>
+      <button id="redoBtn" disabled title="Redo (Ctrl/⌘+Shift+Z)">↷ Redo</button>
+      <span id="saveState" class="muted"></span>
       <button id="splitBtn" style="margin-left:auto">✂ Split at playhead</button>
     </div>
   </section>
@@ -123,7 +128,7 @@ progress{width:min(420px,80vw);margin-top:12px}
   </section>
 
   <section id="seqPanel">
-    <h2>2. Sequence (drag ⠿ or use ◀ ▶ to reorder)</h2>
+    <h2>2. Sequence (type a position number, drag ⠿, or use ◀ ▶ to reorder)</h2>
     <div id="timeline"></div>
   </section>
 </main>
@@ -274,8 +279,10 @@ function addMedia(f, {id, transcript, toTimeline = true} = {}) {
   });
 }
 async function addFiles(files) {
+  const before = snap();
   pause();
   for (const f of [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}))) await addMedia(f);
+  commit(before);
   seek(t);
 }
 $('#uploadBtn').onclick = () => $('#file').click();
@@ -316,7 +323,35 @@ $('#musicFile').onchange = e => { setMusic(e.target.files[0]); e.target.value = 
 $('#musicDel').onclick = () => setMusic(null);
 
 // ---------- Sequence ----------
-function edit(fn) { pause(); fn(); renderTimeline(); seek(Math.min(t, total())); }
+// ---------- Undo / redo: snapshots of the edit (not the media files) ----------
+const undoStack = [], redoStack = [];
+const snap = () => JSON.stringify({timeline, subs, ratio: $('#ratio').value, fit: $('#fit').value});
+// Record `before` as one undo step if something actually changed since.
+function commit(before) {
+  if (before === snap()) return;
+  undoStack.push(before);
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+  updateUndoUI();
+}
+function restoreSnap(json) {
+  const o = JSON.parse(json);
+  pause();
+  timeline = o.timeline; subs.splice(0, subs.length, ...o.subs);
+  $('#fit').value = o.fit; setRatio(o.ratio);
+  renderTimeline(); renderSubs(); seek(Math.min(t, total()));
+}
+function undo() { if (!undoStack.length) return; redoStack.push(snap()); restoreSnap(undoStack.pop()); updateUndoUI(); }
+function redo() { if (!redoStack.length) return; undoStack.push(snap()); restoreSnap(redoStack.pop()); updateUndoUI(); }
+function updateUndoUI() { $('#undoBtn').disabled = !undoStack.length; $('#redoBtn').disabled = !redoStack.length; }
+$('#undoBtn').onclick = undo;
+$('#redoBtn').onclick = redo;
+// Fields marked data-undo (ratio, fit, subtitle rows) record one step per edit, not per keystroke.
+let fieldBefore = null;
+document.addEventListener('focusin', e => { if (e.target.closest('[data-undo]')) fieldBefore = snap(); });
+document.addEventListener('change', e => { if (fieldBefore && e.target.closest('[data-undo]')) { commit(fieldBefore); fieldBefore = snap(); } });
+
+function edit(fn) { const before = snap(); pause(); fn(); commit(before); renderTimeline(); seek(Math.min(t, total())); }
 const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${v}</option>`).join('');
 
 function renderTimeline() {
@@ -328,7 +363,7 @@ function renderTimeline() {
     card.className = 'card';
     card.style.flexGrow = Math.max(1, dur(c));
     card.innerHTML = `
-      <div class="row"><span class="handle" draggable="true" title="Drag to reorder">⠿</span><b title="${esc(m.name)}">${i + 1}. ${esc(m.name)}</b></div>
+      <div class="row"><span class="handle" draggable="true" title="Drag to reorder">⠿</span><input class="pos" type="number" min="1" max="${timeline.length}" step="1" value="${i + 1}" data-k="pos" aria-label="Position in sequence (1 to ${timeline.length})" title="Type a number to move this clip there"><b title="${esc(m.name)}">${esc(m.name)}</b></div>
       ${img ? '' : `<label>Start <input type="number" step="0.1" min="0" max="${(c.out - 0.1).toFixed(1)}" data-k="in" value="${c.in.toFixed(1)}"></label>`}
       <label>${img ? 'Length' : 'End'} <input type="number" step="0.1" min="${(c.in + 0.1).toFixed(1)}" max="${m.duration.toFixed(1)}" data-k="out" value="${c.out.toFixed(1)}"></label>
       <label>Motion <select data-k="motion">${opts(MOTIONS, c.motion)}</select></label>
@@ -340,6 +375,7 @@ function renderTimeline() {
     card.onchange = e => {
       const k = e.target.dataset.k;
       if (k === 'motion' || k === 'transition') return edit(() => c[k] = e.target.value);
+      if (k === 'pos') return edit(() => timeline.splice(clamp(Math.round(+e.target.value || 1), 1, timeline.length) - 1, 0, timeline.splice(i, 1)[0]));
       const v = +e.target.value || 0;
       if (k === 'in') edit(() => c.in = clamp(v, 0, c.out - 0.1));
       if (k === 'out') edit(() => c.out = clamp(v, c.in + 0.1, m.duration));
@@ -451,6 +487,12 @@ $('#playBtn').onclick = togglePlay;
 $('#scrub').oninput = e => seek(+e.target.value);
 document.onkeydown = e => {
   if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); togglePlay(); }
+  // text fields keep their own undo for typing
+  if ((e.metaKey || e.ctrlKey) && !/INPUT|TEXTAREA/.test(e.target.tagName)) {
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+  }
 };
 function updateUI() {
   $('#playBtn').textContent = playing ? '❚❚ Pause' : '▶ Play';
@@ -555,6 +597,7 @@ function renderSubs() {
   subs.sort((a, b) => a.start - b.start || a.lang.localeCompare(b.lang)).forEach(s => {
     const row = document.createElement('div');
     row.className = 'sub';
+    row.dataset.undo = '';
     row.innerHTML = `<div class="row">
         <select data-k="lang" aria-label="Language"><option value="en">EN</option><option value="hi">HI</option></select>
         <input type="number" step="0.1" min="0" data-k="start" aria-label="Start (seconds)" title="Start (s)">
@@ -576,15 +619,16 @@ function renderSubs() {
       if (!playing) draw();
     };
     row.onclick = e => {
-      if (e.target.dataset.a === 'del') { subs.splice(subs.indexOf(s), 1); renderSubs(); draw(); }
+      if (e.target.dataset.a === 'del') { const before = snap(); subs.splice(subs.indexOf(s), 1); commit(before); renderSubs(); draw(); }
       if (e.target.dataset.a === 'go') seek(s.start);
     };
     box.append(row);
   });
 }
 $('#addSub').onclick = () => {
-  const lang = $('#newLang').value;
+  const lang = $('#newLang').value, before = snap();
   subs.push({start: +t.toFixed(1), end: +(t + 3).toFixed(1), text: lang === 'hi' ? 'नमस्ते' : 'Hello', lang});
+  commit(before);
   renderSubs(); draw();
 };
 $('#srtBtn').onclick = () => $('#srt').click();
@@ -593,8 +637,9 @@ $('#srt').onchange = async e => {
   if (!f) return;
   const parsed = parseSRT(await f.text());
   if (!parsed.length) return notify('No subtitles found in that file.');
-  const lang = $('#newLang').value;
+  const lang = $('#newLang').value, before = snap();
   parsed.forEach(s => subs.push({...s, lang}));
+  commit(before);
   renderSubs(); draw();
 };
 
@@ -604,17 +649,52 @@ $('#srt').onchange = async e => {
 const WORKER_SRC = `
 import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
 let asr, mt;
+const SR = 16000, HOP = 800;
+// Level (dB) of the 50 ms frame starting at sample i.
+const level = (a, i) => { let e = 0; const end = Math.min(i + HOP, a.length); for (let j = i; j < end; j++) e += a[j] * a[j]; return 10 * Math.log10(e / HOP + 1e-10); };
+// Pieces of at most 28 s, each cut at the quietest moment of its last 6 s so no word is split.
+// Silent pieces are skipped: faster, and Whisper invents text in silence.
+const pieces = a => {
+  const out = [];
+  for (let s = 0; s < a.length;) {
+    let e = Math.min(s + 28 * SR, a.length);
+    if (e < a.length) {
+      let best = e, quietest = Infinity;
+      for (let i = e - 6 * SR; i < e; i += HOP) { const d = level(a, i); if (d < quietest) { quietest = d; best = i; } }
+      e = best;
+    }
+    let loudest = -Infinity;
+    for (let i = s; i < e; i += HOP) loudest = Math.max(loudest, level(a, i));
+    if (loudest > -50) out.push([s, e]);
+    s = e;
+  }
+  return out;
+};
 self.onmessage = async ({ data: { audio, lang } }) => {
   const progress = p => p.status === 'progress' && self.postMessage({ status: 'download', file: p.file, progress: p.progress });
-  const listen = async (task, key) => (await asr(audio, { language: lang === 'hi' ? 'hindi' : 'english', task, return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, no_repeat_ngram_size: 3 })) // stops Whisper's 'पर पर पर…' loops
-    .chunks.map(c => ({ start: c.timestamp[0], end: c.timestamp[1], [key]: c.text.replace(/\\[[^\\]]*\\]|\\([^)]*\\)|♪/g, '').trim() })).filter(s => s[key]); // drop [Music], (applause), ♪ tags
+  const parts = pieces(audio), passes = lang === 'hi' ? 2 : 1, total = Math.max(1, parts.length * passes);
+  let done = 0, t0 = 0;
+  const listen = async (task, key) => {
+    const segs = [];
+    for (const [a, b] of parts) {
+      const out = await asr(audio.subarray(a, b), { language: lang === 'hi' ? 'hindi' : 'english', task, return_timestamps: true, no_repeat_ngram_size: 3 }); // no_repeat stops 'पर पर पर…' loops
+      for (const c of out.chunks) {
+        const text = c.text.replace(/\\[[^\\]]*\\]|\\([^)]*\\)|♪/g, '').trim(); // drop [Music], (applause), ♪ tags
+        if (text) segs.push({ start: a / SR + c.timestamp[0], end: a / SR + (c.timestamp[1] ?? (b - a) / SR), [key]: text });
+      }
+      const f = ++done / total, sec = (Date.now() - t0) / 1000;
+      self.postMessage({ status: 'listening', task, pct: Math.round(f * 100), eta: Math.round(sec / f * (1 - f)) });
+    }
+    return segs;
+  };
   try {
     // shortcut: WASM + 8-bit weights runs everywhere but is slower than WebGPU; switch device when WebGPU is common
     asr ??= await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', { dtype: 'q8', device: 'wasm', progress_callback: progress });
-    self.postMessage({ status: 'transcribing' });
+    self.postMessage({ status: 'listening', task: 'transcribe', pct: 0 });
+    t0 = Date.now();
     const segs = await listen('transcribe', lang);
-    self.postMessage({ status: 'translating' });
     if (lang === 'hi') return self.postMessage({ status: 'done', segs: [...segs, ...await listen('translate', 'en')] });
+    self.postMessage({ status: 'translating' });
     mt ??= await pipeline('translation', 'Xenova/opus-mt-en-hi', { dtype: 'q8', progress_callback: progress });
     for (const s of segs) s.hi = (await mt(s.en))[0].translation_text; // one at a time: batching makes Marian repeat itself
     self.postMessage({ status: 'done', segs });
@@ -641,7 +721,10 @@ async function transcribe(m, label) {
     worker.onerror = () => { worker = null; rej(new Error('Could not load the speech engine. Check your internet connection (needed the first time).')); };
     worker.onmessage = ({data: d}) => {
       if (d.status === 'download') busy(`${label}<br>Downloading AI models (first time only, about 300 MB)…<br><small class="muted">${esc(d.file)}</small>`, d.progress / 100, cancel);
-      if (d.status === 'transcribing') busy(`${label}<br>Listening to speech…`, null, cancel);
+      if (d.status === 'listening') {
+        const left = d.eta >= 60 ? `about ${Math.round(d.eta / 60)} min left` : d.eta > 0 ? `about ${d.eta} s left` : d.pct ? '' : 'working out the time…';
+        busy(`${label}<br>${d.task === 'translate' ? 'Listening again for English subtitles' : 'Listening to speech'}… ${d.pct}%${left ? ' · ' + left : ''}`, d.pct / 100, cancel);
+      }
       if (d.status === 'translating') busy(`${label}<br>Translating to ${other === 'hi' ? 'Hindi' : 'English'}…`, null, cancel);
       if (d.status === 'error') rej(new Error(d.error));
       if (d.status === 'done') res(d.segs.map(s => ({...s, end: s.end ?? m.duration})));
@@ -663,7 +746,9 @@ async function speechToSubs() {
 $('#autoSubs').onclick = async () => {
   if (!timeline.length) return notify('Upload clips first.');
   pause();
+  const before = snap();
   try { await speechToSubs(); } catch (e) { if (e.message !== CANCELLED) notify('Subtitle generation failed: ' + e.message); }
+  commit(before);
   busy(null);
 };
 
@@ -740,6 +825,7 @@ function autoStyle() {
 $('#autoBtn').onclick = async () => {
   if (!media.length) return notify('Upload your clips first, then press Auto edit.');
   pause();
+  const before = snap(); // the whole Auto edit is one undo step
   if (!timeline.length) media.forEach(m => timeline.push(newClip(m)));
   let stopped = false;
   const stop = () => { stopped = true; busy('Stopping…'); };
@@ -751,6 +837,7 @@ $('#autoBtn').onclick = async () => {
     try { await speechToSubs(); }
     catch (e) { if (e.message === CANCELLED) stopped = true; else notify('Subtitles were skipped: ' + e.message); }
   }
+  commit(before);
   busy(null);
   await seek(0);
   if (stopped) return notify('Auto edit stopped. Your clips are kept; you can edit them or press Auto edit again.');
@@ -794,16 +881,41 @@ function download(blob, name) {
 
 // ---------- Project file (.vedit): "VEDT" + uint32 JSON length + JSON + raw media bytes ----------
 const MAGIC = 0x56454454;
+const projectMeta = () => ({
+  v: 1,
+  settings: {ratio: $('#ratio').value, fit: $('#fit').value, subLang: $('#subLang').value, speech: $('#speech').value, musicVol: $('#musicVol').value},
+  media: media.map(m => ({id: m.id, name: m.name, mime: m.file.type, size: m.file.size, transcript: m.transcript, transcriptLang: m.transcriptLang, grade: m.grade})),
+  music: music && {name: music.name, mime: music.file.type, size: music.file.size},
+  timeline, subs,
+});
+const EMPTY = {settings: {ratio: '16:9', fit: 'cover', subLang: 'both', speech: 'hi', musicVol: '0.5'}, media: [], music: null, timeline: [], subs: []};
+let loading = false;
+// Replace the current project with `meta`; files[i] is media i's file, files[media.length] the music.
+async function loadProjectData(meta, files) {
+  loading = true;
+  try {
+    pause();
+    media.forEach(m => m.type === 'video' && m.el.pause());
+    media.length = 0; timeline = []; subs.length = 0; setMusic(null);
+    for (const [i, m] of meta.media.entries()) {
+      const added = await addMedia(files[i], {id: m.id, transcript: m.transcript, toTimeline: false});
+      if (added) Object.assign(added, {transcriptLang: m.transcriptLang, grade: m.grade});
+    }
+    if (meta.music) setMusic(files[meta.media.length]);
+    timeline = meta.timeline.filter(c => getMedia(c.mediaId));
+    subs.push(...meta.subs);
+    uid = Math.max(0, ...media.map(m => m.id), ...timeline.map(c => c.id));
+    const s = meta.settings;
+    $('#fit').value = s.fit; $('#subLang').value = s.subLang; $('#speech').value = s.speech; $('#musicVol').value = s.musicVol;
+    setRatio(s.ratio);
+    undoStack.length = redoStack.length = 0; updateUndoUI();
+    renderMedia(); renderTimeline(); renderSubs(); await seek(0);
+  } finally { loading = false; }
+}
 $('#saveBtn').onclick = () => {
   if (!media.length) return notify('Nothing to save yet: upload clips first.');
   const files = [...media.map(m => m.file), ...(music ? [music.file] : [])];
-  const meta = {
-    v: 1,
-    settings: {ratio: $('#ratio').value, fit: $('#fit').value, subLang: $('#subLang').value, speech: $('#speech').value, musicVol: $('#musicVol').value},
-    media: media.map(m => ({id: m.id, name: m.name, mime: m.file.type, size: m.file.size, transcript: m.transcript, transcriptLang: m.transcriptLang, grade: m.grade})),
-    music: music && {name: music.name, mime: music.file.type, size: music.file.size},
-    timeline, subs,
-  };
+  const meta = projectMeta();
   const json = new TextEncoder().encode(JSON.stringify(meta));
   const head = new DataView(new ArrayBuffer(8));
   head.setUint32(0, MAGIC); head.setUint32(4, json.length);
@@ -817,26 +929,90 @@ $('#projFile').onchange = async e => {
     const head = new DataView(await f.slice(0, 8).arrayBuffer());
     if (f.size < 8 || head.getUint32(0) !== MAGIC) throw new Error('This is not a project file.');
     const len = head.getUint32(4), meta = JSON.parse(await f.slice(8, 8 + len).text());
-    pause(); busy('Opening project…');
-    media.forEach(m => m.type === 'video' && m.el.pause());
-    media.length = 0; timeline = []; subs.length = 0; setMusic(null);
+    busy('Opening project…');
     let off = 8 + len;
-    for (const m of meta.media) {
-      const added = await addMedia(new File([f.slice(off, off + m.size)], m.name, {type: m.mime}), {id: m.id, transcript: m.transcript, toTimeline: false});
-      if (added) Object.assign(added, {transcriptLang: m.transcriptLang, grade: m.grade});
-      off += m.size;
-    }
-    if (meta.music) setMusic(new File([f.slice(off, off + meta.music.size)], meta.music.name, {type: meta.music.mime}));
-    timeline = meta.timeline.filter(c => getMedia(c.mediaId));
-    subs.push(...meta.subs);
-    uid = Math.max(0, ...media.map(m => m.id), ...timeline.map(c => c.id));
-    const s = meta.settings;
-    $('#fit').value = s.fit; $('#subLang').value = s.subLang; $('#speech').value = s.speech; $('#musicVol').value = s.musicVol;
-    setRatio(s.ratio);
-    renderMedia(); renderTimeline(); renderSubs(); await seek(0);
+    const files = [];
+    for (const m of [...meta.media, ...(meta.music ? [meta.music] : [])]) { files.push(new File([f.slice(off, off + m.size)], m.name, {type: m.mime})); off += m.size; }
+    await clearAutosave();
+    await loadProjectData(meta, files);
   } catch (err) { notify('Could not open project: ' + err.message); }
   busy(null);
 };
+
+// ---------- Autosave: project + media in IndexedDB, so a refresh or crash loses at most a few seconds ----------
+const db = new Promise((res, rej) => {
+  const r = indexedDB.open('klipzo-beta', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+// Run fn(store) in one transaction; resolves with the last request's result when the transaction commits.
+const idb = async (mode, fn) => {
+  const d = await db;
+  return new Promise((res, rej) => {
+    const tx = d.transaction('kv', mode), req = fn(tx.objectStore('kv'));
+    tx.oncomplete = () => res(req?.result); tx.onerror = tx.onabort = () => rej(tx.error);
+  });
+};
+const savedFiles = new Set();
+let lastSaved = '', savedMusic = null, saving = false, autosaveBroken = false;
+async function clearAutosave() {
+  savedFiles.clear(); savedMusic = null; lastSaved = '';
+  await idb('readwrite', s => s.clear()).catch(() => {});
+}
+async function autosave() {
+  if (saving || loading || autosaveBroken) return;
+  const meta = projectMeta(), key = JSON.stringify(meta);
+  if (key === lastSaved) return;
+  saving = true; $('#saveState').textContent = 'Saving…';
+  try {
+    await idb('readwrite', s => {
+      for (const m of media) if (!savedFiles.has(m.id)) s.put(m.file, 'file:' + m.id); // each file is stored once
+      if (music && savedMusic !== music.file) s.put(music.file, 'music');
+      return s.put(meta, 'meta');
+    });
+    media.forEach(m => savedFiles.add(m.id)); savedMusic = music?.file ?? null; lastSaved = key;
+    $('#saveState').textContent = media.length ? 'Saved ✓' : '';
+    if (media.length) navigator.storage?.persist?.();
+  } catch (e) {
+    autosaveBroken = true; $('#saveState').textContent = '';
+    notify('Autosave is off in this browser (' + (e?.name || 'storage error') + '). Use Save project to keep your work.');
+  }
+  saving = false;
+}
+async function restoreAutosave() {
+  try {
+    const meta = await idb('readonly', s => s.get('meta'));
+    if (!meta?.media?.length) return;
+    const files = [];
+    await idb('readonly', s => {
+      meta.media.forEach((m, i) => { s.get('file:' + m.id).onsuccess = e => files[i] = e.target.result; });
+      if (meta.music) s.get('music').onsuccess = e => files[meta.media.length] = e.target.result;
+    });
+    if (files.filter(Boolean).length < meta.media.length + (meta.music ? 1 : 0)) return notify('Your last project could not be fully restored.');
+    busy('Restoring your last project…');
+    await loadProjectData(meta, files);
+    meta.media.forEach(m => savedFiles.add(m.id)); savedMusic = music?.file ?? null; lastSaved = JSON.stringify(projectMeta());
+    $('#saveState').textContent = 'Saved ✓';
+    notify('Welcome back: your last project was restored.');
+  } catch { /* no storage (private mode): start empty */ }
+  busy(null);
+}
+// Two clicks within 4 s, so a stray click can't wipe the project.
+let newArmed = 0;
+$('#newBtn').onclick = async () => {
+  if (Date.now() - newArmed > 4000) {
+    if (!media.length) return notify('This is already a new, empty project.');
+    newArmed = Date.now(); $('#newBtn').textContent = 'Click again to clear';
+    setTimeout(() => { $('#newBtn').textContent = 'New project'; }, 4000);
+    return;
+  }
+  newArmed = 0; $('#newBtn').textContent = 'New project';
+  await clearAutosave();
+  await loadProjectData(EMPTY, []);
+  $('#saveState').textContent = '';
+  notify('Started a new project.');
+};
+restoreAutosave().then(() => setInterval(autosave, 3000));
 
 // ---------- Install as an app (PWA) ----------
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js');
