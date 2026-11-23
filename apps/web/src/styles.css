@@ -1,0 +1,134 @@
+@import url("https://fonts.googleapis.com/css2?family=Mukta:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&family=Poppins:wght@400;600&display=swap");
+
+:root {
+  --bg: #ffffff;
+  --panel: #f4f4f7;
+  --line: #dcdce3;
+  --text: #16161d;
+  --muted: #5d5d6b;
+  --accent: #4a63e7;
+  --danger: #c0262d;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111114;
+    --panel: #1b1b20;
+    --line: #2e2e36;
+    --text: #ececf1;
+    --muted: #a0a0ad;
+    --accent: #7d92ff;
+    --danger: #ff6b70;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111114;
+  --panel: #1b1b20;
+  --line: #2e2e36;
+  --text: #ececf1;
+  --muted: #a0a0ad;
+  --accent: #7d92ff;
+  --danger: #ff6b70;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px / 1.5 Poppins,
+    Mukta,
+    "Noto Sans Devanagari",
+    system-ui,
+    sans-serif;
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+header h1 {
+  margin: 0;
+  font-size: 20px;
+}
+header p {
+  margin: 0;
+}
+.spacer {
+  flex: 1;
+}
+main {
+  padding: 16px;
+  max-width: 720px;
+}
+.muted {
+  color: var(--muted);
+}
+select,
+.button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.button {
+  display: inline-block;
+  cursor: pointer;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.button:focus-within,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.card {
+  margin-top: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.card h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+.card.error {
+  border-color: var(--danger);
+}
+.card.error h2 {
+  color: var(--danger);
+}
+.project-name {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+dl {
+  display: grid;
+  grid-template-columns: max-content auto;
+  gap: 4px 16px;
+  margin: 0;
+}
+dd {
+  margin: 0;
+}

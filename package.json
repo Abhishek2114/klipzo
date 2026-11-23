@@ -1,0 +1,26 @@
+{
+  "name": "klipzo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @klipzo/web dev",
+    "build": "pnpm --filter @klipzo/web build",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "e2e": "pnpm --filter @klipzo/web e2e",
+    "schema:types": "pnpm --filter @klipzo/schema gen",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm e2e"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}

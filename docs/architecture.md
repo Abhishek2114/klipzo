@@ -4,22 +4,22 @@ Status: **draft for approval** · 2026-11-23
 
 Klipzo is a Hindi-first, non-destructive video editor for Indian creators. It ships as a web app and a desktop app (Windows + macOS) from one codebase. This document covers the architecture, data model, project schema, API, risks and licensing. Companion files:
 
-- [`project.schema.json`](project.schema.json): the project file format (JSON Schema 2020-12)
-- [`examples/sample-project.json`](examples/sample-project.json): a valid example project
+- [`project.schema.json`](../packages/schema/project.schema.json): the project file format (JSON Schema 2020-12)
+- [`v1-sample.json`](../packages/schema/fixtures/v1-sample.json): a valid example project (also the test fixture)
 - [`api/transcribe.openapi.yaml`](api/transcribe.openapi.yaml): the only server API in v1
 
 ---
 
 ## 0. Decisions
 
-| # | Decision | Why |
-|---|---|---|
-| D1 | **One compositor.** A single WebGL2 renderer draws every frame for both preview and export. Encoders (WebCodecs, or native FFmpeg on desktop) only compress frames they're given. | Preview and export match by construction. Every effect, grade and subtitle style is written once. No HarfBuzz/libass: the browser already shapes Devanagari correctly (shown in the prototype). |
-| D2 | **Local-first.** Media, projects and most AI run on the user's device. No accounts, server storage or job queue in v1. | Free tier costs nothing to serve, works offline, and user media stays private. Postgres/Redis/Celery/S3/tus arrive with the cloud tier (after D7). |
-| D3 | **Hybrid speech-to-text.** Free tier: Whisper-small in the browser. Paid tier: one stateless GPU service running faster-whisper large-v3. | Best Hindi accuracy where it's paid for. Only 16 kHz audio is uploaded, never video. |
-| D4 | **Desktop = Tauri 2 on Windows + macOS.** | Most target users are on Windows laptops. One CI pipeline builds both. |
-| D5 | **WebGL2 first; WebGPU only if perf targets fail.** | WebGL2 runs everywhere, including Safari/WKWebView. A second GPU backend would double the shader work. |
-| D6 | **Frame-accurate offline export, not real-time recording.** | The prototype's MediaRecorder export ran in real time and froze when the window was hidden. Offline export runs faster than real time and isn't affected by the window being hidden. |
+| #   | Decision                                                                                                                                                                          | Why                                                                                                                                                                                             |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D1  | **One compositor.** A single WebGL2 renderer draws every frame for both preview and export. Encoders (WebCodecs, or native FFmpeg on desktop) only compress frames they're given. | Preview and export match by construction. Every effect, grade and subtitle style is written once. No HarfBuzz/libass: the browser already shapes Devanagari correctly (shown in the prototype). |
+| D2  | **Local-first.** Media, projects and most AI run on the user's device. No accounts, server storage or job queue in v1.                                                            | Free tier costs nothing to serve, works offline, and user media stays private. Postgres/Redis/Celery/S3/tus arrive with the cloud tier (after D7).                                              |
+| D3  | **Hybrid speech-to-text.** Free tier: Whisper-small in the browser. Paid tier: one stateless GPU service running faster-whisper large-v3.                                         | Best Hindi accuracy where it's paid for. Only 16 kHz audio is uploaded, never video.                                                                                                            |
+| D4  | **Desktop = Tauri 2 on Windows + macOS.**                                                                                                                                         | Most target users are on Windows laptops. One CI pipeline builds both.                                                                                                                          |
+| D5  | **WebGL2 first; WebGPU only if perf targets fail.**                                                                                                                               | WebGL2 runs everywhere, including Safari/WKWebView. A second GPU backend would double the shader work.                                                                                          |
+| D6  | **Frame-accurate offline export, not real-time recording.**                                                                                                                       | The prototype's MediaRecorder export ran in real time and froze when the window was hidden. Offline export runs faster than real time and isn't affected by the window being hidden.            |
 
 Lessons from the prototype (`/prototype`) that shape this design:
 
@@ -51,7 +51,9 @@ Lessons from the prototype (`/prototype`) that shape this design:
 
 **The UI thread never decodes, renders or runs a model.** It sends commands to the engine and draws a small preview canvas that the render worker controls via `OffscreenCanvas`. This satisfies "no UI blocking, ever".
 
-### Monorepo layout (built in Deliverable 2)
+### Monorepo layout
+
+Each package is created when it first gets code. Deliverable 2 created `apps/web`, `apps/desktop` and `packages/schema`.
 
 ```
 apps/web            Vite + React + TS app (also the desktop frontend)
@@ -68,16 +70,18 @@ prototype           The single-file prototype, kept for reference only
 
 Dependencies are kept small. Each one earns its place:
 
-| Need | Choice | Licence |
-|---|---|---|
-| UI | React, Zustand | MIT |
-| Undo patches | Immer (`produceWithPatches`) | MIT |
-| Demux + mux MP4/MOV/WebM/MKV | Mediabunny | MPL-2.0 |
-| Decode/encode | WebCodecs (platform) | n/a |
-| Fallback decode for unsupported codecs | Native FFmpeg (desktop) or an LGPL ffmpeg.wasm build (web) | LGPL-2.1 |
-| ML runtime in browser | transformers.js + onnxruntime-web | Apache-2.0 / MIT |
-| Face detection | MediaPipe Tasks Vision | Apache-2.0 |
-| Tests | Vitest, Playwright | MIT / Apache-2.0 |
+| Need                                   | Choice                                                     | Licence          |
+| -------------------------------------- | ---------------------------------------------------------- | ---------------- |
+| UI                                     | React, Zustand                                             | MIT              |
+| Undo patches                           | Immer (`produceWithPatches`)                               | MIT              |
+| Demux + mux MP4/MOV/WebM/MKV           | Mediabunny                                                 | MPL-2.0          |
+| Decode/encode                          | WebCodecs (platform)                                       | n/a              |
+| Fallback decode for unsupported codecs | Native FFmpeg (desktop) or an LGPL ffmpeg.wasm build (web) | LGPL-2.1         |
+| ML runtime in browser                  | transformers.js + onnxruntime-web                          | Apache-2.0 / MIT |
+| Face detection                         | MediaPipe Tasks Vision                                     | Apache-2.0       |
+| Tests                                  | Vitest, Playwright                                         | MIT / Apache-2.0 |
+| Lint + format                          | Biome                                                      | MIT / Apache-2.0 |
+| Project validation                     | Ajv (JSON Schema 2020-12)                                  | MIT              |
 
 ---
 
@@ -220,9 +224,9 @@ Captions anchored to a clip are stored in that clip's source time and mapped thr
 - **Voice detection:** Silero VAD (ONNX, in a worker) on the 16 kHz analysis audio, giving speech probability per 32 ms. It is robust to background noise, music and breathing, unlike the prototype's energy threshold.
 - **Controls:** threshold (dB floor, plus VAD probability), minimum silence (0.3–2 s), padding before and after (default 100 ms), and keep pauses shorter than X.
 - **Modes:**
-  - *Remove*: regions marked accepted.
-  - *Shorten*: each silence is trimmed to the target length.
-  - *Mark only*: regions are proposed and shown in red on the timeline.
+  - _Remove_: regions marked accepted.
+  - _Shorten_: each silence is trimmed to the target length.
+  - _Mark only_: regions are proposed and shown in red on the timeline.
 - **Review:** accept/reject per region, a "time saved" counter, and accept/reject all.
 - **Fillers:** use the transcript's word timestamps and a filler list per language (default: um, uh, matlab, basically, तो, मतलब, …) that the user can edit.
 - **Jump-cut smoothing:**
@@ -304,7 +308,7 @@ Project
 └─ dictionary[]    {from, to, lang}
 ```
 
-Bulky analysis results are **not** in the project file. These are transcripts, VAD output, scene cuts, face tracks, colour stats, waveforms and thumbnails. They live in OPFS, keyed by asset `contentHash` plus analysis version, so they're shared across projects and recomputable. The project stores only *decisions*: cuts, grades, caption text.
+Bulky analysis results are **not** in the project file. These are transcripts, VAD output, scene cuts, face tracks, colour stats, waveforms and thumbnails. They live in OPFS, keyed by asset `contentHash` plus analysis version, so they're shared across projects and recomputable. The project stores only _decisions_: cuts, grades, caption text.
 
 ---
 
@@ -314,12 +318,12 @@ Bulky analysis results are **not** in the project file. These are transcripts, V
 
 The full spec is in [`api/transcribe.openapi.yaml`](api/transcribe.openapi.yaml).
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/v1/transcriptions` | Upload 16 kHz mono Opus audio (≤ 50 MB, ≤ 3 h) with language and options. Returns `202 {id}`. |
-| `GET` | `/v1/transcriptions/{id}` | Status, progress, and the result (segments with word timestamps, optional translation and Roman forms). |
-| `DELETE` | `/v1/transcriptions/{id}` | Delete the result now; it is otherwise auto-deleted after 24 h. |
-| `GET` | `/v1/health` | Liveness, model loaded, GPU memory. |
+| Method   | Path                      | Purpose                                                                                                 |
+| -------- | ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/v1/transcriptions`      | Upload 16 kHz mono Opus audio (≤ 50 MB, ≤ 3 h) with language and options. Returns `202 {id}`.           |
+| `GET`    | `/v1/transcriptions/{id}` | Status, progress, and the result (segments with word timestamps, optional translation and Roman forms). |
+| `DELETE` | `/v1/transcriptions/{id}` | Delete the result now; it is otherwise auto-deleted after 24 h.                                         |
+| `GET`    | `/v1/health`              | Liveness, model loaded, GPU memory.                                                                     |
 
 - **Auth:** Bearer token issued by the licence/payment provider for paid users.
 - **Limits:**
@@ -336,8 +340,10 @@ The full spec is in [`api/transcribe.openapi.yaml`](api/transcribe.openapi.yaml)
 // UI → render worker
 type RenderMsg =
   | { type: 'load'; project: Project }
-  | { type: 'patch'; patches: Patch[] }              // same Immer patches as undo/autosave
-  | { type: 'seek'; tUs: number } | { type: 'play' } | { type: 'pause' }
+  | { type: 'patch'; patches: Patch[] } // same Immer patches as undo/autosave
+  | { type: 'seek'; tUs: number }
+  | { type: 'play' }
+  | { type: 'pause' }
   | { type: 'view'; split?: number; scopes?: ScopeKind[] };
 // render worker → UI
 type RenderEvt = { type: 'time'; tUs: number } | { type: 'scopes'; data: ScopeData } | { type: 'error'; error: string };
@@ -346,9 +352,14 @@ type RenderEvt = { type: 'time'; tUs: number } | { type: 'scopes'; data: ScopeDa
 type AiJob =
   | { type: 'transcribe'; assetHash: string; lang: 'auto' | 'hi' | 'en'; translate: boolean; engine: 'local' | 'cloud' }
   | { type: 'vad'; assetHash: string }
-  | { type: 'scenes'; assetHash: string } | { type: 'faces'; assetHash: string }
+  | { type: 'scenes'; assetHash: string }
+  | { type: 'faces'; assetHash: string }
   | { type: 'colorStats'; assetHash: string; frameTimesUs: number[] };
-type AiEvt = { jobId: string } & ({ type: 'progress'; stage: string; pct: number } | { type: 'done'; ref: string } | { type: 'error'; error: string });
+type AiEvt = { jobId: string } & (
+  | { type: 'progress'; stage: string; pct: number }
+  | { type: 'done'; ref: string }
+  | { type: 'error'; error: string }
+);
 ```
 
 ### 6.3 Later (cloud tier, not built in v1)
@@ -359,13 +370,13 @@ Accounts, project sync, cloud 4K export and server-side AI clips. These bring Fa
 
 ## 7. Performance plan
 
-| Target | How |
-|---|---|
-| 60 fps 1080p preview on an 8 GB laptop | 540p short-GOP proxies; decode and composite in workers; one shader pass per layer; caption textures cached; at most 3 decoder instances per asset. |
-| No UI blocking | Everything heavy runs in workers. The UI thread only runs React and sends patches. A CI performance test fails if any main-thread task in the editing flow exceeds 50 ms. |
-| Low-end and mobile | Lightweight mode: 360p proxies, preview at half resolution, scopes off, live grade preview simplified to exposure, contrast and saturation (export still uses the full grade). |
-| Memory | Decoded frames are closed after use. A bounded frame cache of 2 s ahead plus 1 s behind per active asset. Analysis audio streamed from OPFS. |
-| Export speed | Hardware encoders through WebCodecs; above real time at 1080p on mid-range laptops (measured in Deliverable 7). |
+| Target                                 | How                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 60 fps 1080p preview on an 8 GB laptop | 540p short-GOP proxies; decode and composite in workers; one shader pass per layer; caption textures cached; at most 3 decoder instances per asset.                            |
+| No UI blocking                         | Everything heavy runs in workers. The UI thread only runs React and sends patches. A CI performance test fails if any main-thread task in the editing flow exceeds 50 ms.      |
+| Low-end and mobile                     | Lightweight mode: 360p proxies, preview at half resolution, scopes off, live grade preview simplified to exposure, contrast and saturation (export still uses the full grade). |
+| Memory                                 | Decoded frames are closed after use. A bounded frame cache of 2 s ahead plus 1 s behind per active asset. Analysis audio streamed from OPFS.                                   |
+| Export speed                           | Hardware encoders through WebCodecs; above real time at 1080p on mid-range laptops (measured in Deliverable 7).                                                                |
 
 ---
 
@@ -383,26 +394,26 @@ Accounts, project sync, cloud 4K export and server-side AI clips. These bring Fa
 
 ## 9. Licensing and legal (needs counsel review before launch; this is not legal advice)
 
-| Item | Finding | Action |
-|---|---|---|
-| H.264 / H.265 patents | Encoding with the OS or browser encoder (WebCodecs, VideoToolbox, Media Foundation) uses the platform vendor's licence. Shipping our own x264/x265 encoder would need Via LA / Access Advance licences and makes the build GPL. | **Never bundle x264/x265.** H.265 is offered only where a platform encoder exists. Counsel to confirm for a paid product in India and abroad. |
-| FFmpeg (desktop sidecar) | LGPL-2.1 when built without `--enable-gpl` / `--enable-nonfree`. | Ship an LGPL build as a separate executable. Publish its source and build script, and add a notice in the About screen. |
-| ffmpeg.wasm | The stock `@ffmpeg/core` includes x264, which makes it GPL. | Build our own LGPL wasm core (decode and remux only), or skip wasm and rely on WebCodecs plus the desktop sidecar. Decided in Deliverable 3. |
-| Fonts | Noto Sans Devanagari, Mukta and Poppins: SIL OFL 1.1. Bundling and burning into videos is allowed; selling the fonts on their own is not. | Bundle with the licence files. |
-| Whisper weights, faster-whisper, CTranslate2 | MIT | Attribution in notices. |
-| opus-mt-en-hi | CC-BY-4.0 | **Attribution required** in the app and docs. |
-| Silero VAD | MIT · **MediaPipe:** Apache-2.0 · **IndicXlit:** MIT · **transformers.js:** Apache-2.0 · **onnxruntime-web:** MIT | Attribution in notices. |
-| Mediabunny | MPL-2.0 (file-level copyleft) | Use unmodified, or publish modified files. |
-| Tauri, React, Zustand, Immer | MIT/Apache | Notices. |
-| LUTs, music, effects | None bundled in v1 except LUTs we create (our copyright). | Any future stock content needs a written licence covering redistribution in exported videos. |
-| Test media | Social-media downloads (e.g. the two clips used to test the prototype) can't go into a public test set. | Use FLEURS Hindi (CC-BY-4.0), Common Voice Hindi (CC0), MUSAN noise (CC-BY-4.0), plus our own recordings with written consent. |
-| User content and privacy (India DPDP Act 2023) | Local-first means the free tier collects no media. Paid transcription processes audio as a data processor, so it needs a consent notice, a 24 h retention limit and a deletion endpoint (done in §6.1). | Privacy policy before launch. |
+| Item                                           | Finding                                                                                                                                                                                                                         | Action                                                                                                                                        |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| H.264 / H.265 patents                          | Encoding with the OS or browser encoder (WebCodecs, VideoToolbox, Media Foundation) uses the platform vendor's licence. Shipping our own x264/x265 encoder would need Via LA / Access Advance licences and makes the build GPL. | **Never bundle x264/x265.** H.265 is offered only where a platform encoder exists. Counsel to confirm for a paid product in India and abroad. |
+| FFmpeg (desktop sidecar)                       | LGPL-2.1 when built without `--enable-gpl` / `--enable-nonfree`.                                                                                                                                                                | Ship an LGPL build as a separate executable. Publish its source and build script, and add a notice in the About screen.                       |
+| ffmpeg.wasm                                    | The stock `@ffmpeg/core` includes x264, which makes it GPL.                                                                                                                                                                     | Build our own LGPL wasm core (decode and remux only), or skip wasm and rely on WebCodecs plus the desktop sidecar. Decided in Deliverable 3.  |
+| Fonts                                          | Noto Sans Devanagari, Mukta and Poppins: SIL OFL 1.1. Bundling and burning into videos is allowed; selling the fonts on their own is not.                                                                                       | Bundle with the licence files.                                                                                                                |
+| Whisper weights, faster-whisper, CTranslate2   | MIT                                                                                                                                                                                                                             | Attribution in notices.                                                                                                                       |
+| opus-mt-en-hi                                  | CC-BY-4.0                                                                                                                                                                                                                       | **Attribution required** in the app and docs.                                                                                                 |
+| Silero VAD                                     | MIT · **MediaPipe:** Apache-2.0 · **IndicXlit:** MIT · **transformers.js:** Apache-2.0 · **onnxruntime-web:** MIT                                                                                                               | Attribution in notices.                                                                                                                       |
+| Mediabunny                                     | MPL-2.0 (file-level copyleft)                                                                                                                                                                                                   | Use unmodified, or publish modified files.                                                                                                    |
+| Tauri, React, Zustand, Immer                   | MIT/Apache                                                                                                                                                                                                                      | Notices.                                                                                                                                      |
+| LUTs, music, effects                           | None bundled in v1 except LUTs we create (our copyright).                                                                                                                                                                       | Any future stock content needs a written licence covering redistribution in exported videos.                                                  |
+| Test media                                     | Social-media downloads (e.g. the two clips used to test the prototype) can't go into a public test set.                                                                                                                         | Use FLEURS Hindi (CC-BY-4.0), Common Voice Hindi (CC0), MUSAN noise (CC-BY-4.0), plus our own recordings with written consent.                |
+| User content and privacy (India DPDP Act 2023) | Local-first means the free tier collects no media. Paid transcription processes audio as a data processor, so it needs a consent notice, a 24 h retention limit and a deletion endpoint (done in §6.1).                         | Privacy policy before launch.                                                                                                                 |
 
 ---
 
 ## 10. Quality and benchmarks
 
-- **CI (Deliverable 2):** lint (ESLint, Ruff), typecheck (tsc, mypy), unit tests (Vitest, pytest), schema fixtures, Playwright end-to-end tests (Chromium + WebKit), and Tauri builds for Windows and macOS.
+- **CI (Deliverable 2):** lint and format (Biome), typecheck (tsc), unit tests (Vitest), a check that generated schema types are current, Playwright end-to-end tests (Chromium + WebKit), and Tauri builds for Windows and macOS. Ruff, mypy and pytest join when `services/transcribe` is added (Deliverable 4).
 - **Golden frames:** fixed input images go through the GPU compositor and are compared with the CPU reference (±2/255). Covered:
   - exposure and white-balance correction on known casts
   - skin-tone protection, where the skin patch's hue must stay within ±3°
@@ -422,29 +433,29 @@ Accounts, project sync, cloud 4K export and server-side AI clips. These bring Fa
 
 ## 11. Risks
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| WebCodecs/WebGL gaps in WKWebView (macOS desktop) and Safari | Medium | High | Feature-detect at start. The desktop FFmpeg sidecar covers decode/encode gaps. Playwright WebKit runs in CI from Deliverable 3. |
-| AAC `AudioEncoder` missing on some platforms | Medium | Medium | Fall back to Opus in MP4, or encode AAC in the FFmpeg sidecar (desktop) or a small LGPL wasm core (web). |
-| Memory on 8 GB machines and phones with long videos | High | High | Proxies, a bounded frame cache, streamed analysis audio, and lightweight mode. A 1-hour project is in the performance suite. |
-| Hindi/Hinglish accuracy of in-browser Whisper-small | High | High (the wedge) | Hybrid engine (D3), "fix subtitles", custom dictionary, and the WER benchmark to decide when free users get cloud minutes. |
-| Hinglish romanisation quality (no standard spelling) | High | Medium | IndicXlit on the server, a rule mapper in the browser, a user dictionary, and both forms stored. |
-| Word-level timestamps in the browser | Medium | Medium | Validated in Deliverable 4; interpolation fallback; cloud engine gives true word times. |
-| ffmpeg.wasm licensing and size (~30 MB) | Medium | Medium | Custom LGPL build, loaded only when needed, or not at all (decided in Deliverable 3). |
-| OPFS quota or eviction losing proxies | Low | Low | Proxies and analysis are recomputable. Originals are never only in OPFS on desktop. `navigator.storage.persist()` is requested. |
-| Scope: the spec is a multi-quarter product | High | High | Deliverables are gated. Cloud tier, accounts and team features are explicitly after D7. |
-| Auto Grade brightening intentionally dark scenes | Medium | Low | Measured deltas with thresholds, a per-clip override, a before/after view, and a "keep mood" heuristic (low key + high contrast = leave alone). |
+| Risk                                                         | Likelihood | Impact           | Mitigation                                                                                                                                      |
+| ------------------------------------------------------------ | ---------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| WebCodecs/WebGL gaps in WKWebView (macOS desktop) and Safari | Medium     | High             | Feature-detect at start. The desktop FFmpeg sidecar covers decode/encode gaps. Playwright WebKit runs in CI from Deliverable 3.                 |
+| AAC `AudioEncoder` missing on some platforms                 | Medium     | Medium           | Fall back to Opus in MP4, or encode AAC in the FFmpeg sidecar (desktop) or a small LGPL wasm core (web).                                        |
+| Memory on 8 GB machines and phones with long videos          | High       | High             | Proxies, a bounded frame cache, streamed analysis audio, and lightweight mode. A 1-hour project is in the performance suite.                    |
+| Hindi/Hinglish accuracy of in-browser Whisper-small          | High       | High (the wedge) | Hybrid engine (D3), "fix subtitles", custom dictionary, and the WER benchmark to decide when free users get cloud minutes.                      |
+| Hinglish romanisation quality (no standard spelling)         | High       | Medium           | IndicXlit on the server, a rule mapper in the browser, a user dictionary, and both forms stored.                                                |
+| Word-level timestamps in the browser                         | Medium     | Medium           | Validated in Deliverable 4; interpolation fallback; cloud engine gives true word times.                                                         |
+| ffmpeg.wasm licensing and size (~30 MB)                      | Medium     | Medium           | Custom LGPL build, loaded only when needed, or not at all (decided in Deliverable 3).                                                           |
+| OPFS quota or eviction losing proxies                        | Low        | Low              | Proxies and analysis are recomputable. Originals are never only in OPFS on desktop. `navigator.storage.persist()` is requested.                 |
+| Scope: the spec is a multi-quarter product                   | High       | High             | Deliverables are gated. Cloud tier, accounts and team features are explicitly after D7.                                                         |
+| Auto Grade brightening intentionally dark scenes             | Medium     | Low              | Measured deltas with thresholds, a per-clip override, a before/after view, and a "keep mood" heuristic (low key + high contrast = leave alone). |
 
 ---
 
 ## 12. Delivery plan
 
-| Deliverable | Scope | Exit check |
-|---|---|---|
-| **1** (this) | Architecture, schema, API, risks, licensing | Your approval |
-| **2** | Monorepo (pnpm workspaces), CI (lint, typecheck, Vitest, Playwright, Tauri build matrix), schema package with validation and migrations, empty app shell | CI green on Windows + macOS |
-| **3** | MVP: ingest + proxies → timeline (drag, trim, split, ripple, snapping, zoom, shortcuts, undo) → ratio/fit → export MP4. Autosave + crash recovery. | End-to-end: upload two files, cut, change ratio, export, and check frame count and duration |
-| **4** | Subtitles: local + cloud transcription, translation, Hinglish, fix pass, editor, styles, SRT/VTT/ASS | WER report; Devanagari golden frames |
-| **5** | Silence/filler cutter, scene split, highlights, "make 5 reels", auto-reframe, clip library | False-cut and missed-silence report; captions stay in sync after cuts |
-| **6** | Transitions, keyframes, speed/reverse, style presets, Auto Grade, match colour, moods, LUTs, Log/HDR, scopes | Grade golden frames, including skin protection |
-| **7** | Desktop polish, performance and low-end pass, security review, deployment guide | Performance targets met on a reference 8 GB laptop and a mid-range Android phone |
+| Deliverable  | Scope                                                                                                                                                    | Exit check                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **1** (this) | Architecture, schema, API, risks, licensing                                                                                                              | Your approval                                                                               |
+| **2**        | Monorepo (pnpm workspaces), CI (lint, typecheck, Vitest, Playwright, Tauri build matrix), schema package with validation and migrations, empty app shell | CI green on Windows + macOS                                                                 |
+| **3**        | MVP: ingest + proxies → timeline (drag, trim, split, ripple, snapping, zoom, shortcuts, undo) → ratio/fit → export MP4. Autosave + crash recovery.       | End-to-end: upload two files, cut, change ratio, export, and check frame count and duration |
+| **4**        | Subtitles: local + cloud transcription, translation, Hinglish, fix pass, editor, styles, SRT/VTT/ASS                                                     | WER report; Devanagari golden frames                                                        |
+| **5**        | Silence/filler cutter, scene split, highlights, "make 5 reels", auto-reframe, clip library                                                               | False-cut and missed-silence report; captions stay in sync after cuts                       |
+| **6**        | Transitions, keyframes, speed/reverse, style presets, Auto Grade, match colour, moods, LUTs, Log/HDR, scopes                                             | Grade golden frames, including skin protection                                              |
+| **7**        | Desktop polish, performance and low-end pass, security review, deployment guide                                                                          | Performance targets met on a reference 8 GB laptop and a mid-range Android phone            |

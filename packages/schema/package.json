@@ -1,0 +1,21 @@
+{
+  "name": "@klipzo/schema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./project.schema.json": "./project.schema.json"
+  },
+  "scripts": {
+    "gen": "json2ts -i project.schema.json -o src/types.ts --no-additionalProperties --bannerComment \"/* Generated from project.schema.json by json-schema-to-typescript. Do not edit; run pnpm schema:types. */\" && biome format --write src/types.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "16.0.0"
+  }
+}
