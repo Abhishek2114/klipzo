@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Auto Video Editor</title>
+<title>Klipzo Beta</title>
+<meta name="description" content="Free Hindi-first video editor: auto edit, Hindi + English subtitles, colour and silence cutting. Runs in your browser.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
 <meta name="theme-color" content="#111114">
@@ -45,6 +46,7 @@ canvas{display:block;max-width:100%;max-height:60vh;width:auto;height:auto}
 .sub{border-bottom:1px solid var(--line);padding:6px 0}
 .sub input{width:72px}
 .sub textarea{width:100%;resize:vertical;font-family:"Noto Sans","Noto Sans Devanagari",system-ui,sans-serif}
+footer{padding:0 16px 16px;font-size:13px}
 #busy{position:fixed;inset:0;background:#000d;display:grid;place-items:center;z-index:9;text-align:center;padding:16px}
 #busy[hidden]{display:none}
 #busyMsg{font-size:18px;max-width:520px;line-height:1.5}
@@ -53,7 +55,7 @@ progress{width:min(420px,80vw);margin-top:12px}
 </head>
 <body>
 <header>
-  <h1>🎬 Auto Video Editor</h1>
+  <h1>🎬 Klipzo <small class="muted">Beta</small></h1>
   <button id="openBtn">Open project</button>
   <button id="saveBtn">Save project</button>
   <input type="file" id="projFile" accept=".vedit" hidden>
@@ -120,6 +122,7 @@ progress{width:min(420px,80vw);margin-top:12px}
     <div id="timeline"></div>
   </section>
 </main>
+<footer class="muted">Klipzo Beta · Everything runs in your browser: your videos are never uploaded. Works best in Chrome or Edge on a laptop. Subtitles are AI drafts (Hindi especially): read them before you export. They download about 300&nbsp;MB of AI models the first time.</footer>
 <div id="busy" hidden><div><div id="busyMsg"></div><progress id="busyBar" hidden></progress></div></div>
 
 <script>
@@ -513,6 +516,17 @@ $('#ratio').onchange = e => setRatio(e.target.value);
 $('#fit').onchange = () => draw();
 $('#subLang').onchange = () => draw();
 document.fonts.load('600 20px "Noto Sans Devanagari"', 'नमस्ते').then(draw, draw);
+// Safari has no canvas filters, so Auto color can't show there: say so instead of silently doing nothing.
+{
+  const probe2d = document.createElement('canvas').getContext('2d');
+  probe2d.filter = 'brightness(1.5)';
+  if (probe2d.filter !== 'brightness(1.5)') {
+    const box = $('#autoColor');
+    box.checked = false; box.disabled = true;
+    box.parentElement.title = 'Auto color needs Chrome, Edge or Firefox';
+    box.parentElement.classList.add('muted');
+  }
+}
 
 // ---------- Subtitles (manual) ----------
 function renderSubs() {
@@ -572,7 +586,7 @@ import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers
 let asr, mt;
 self.onmessage = async ({ data: { audio, lang } }) => {
   const progress = p => p.status === 'progress' && self.postMessage({ status: 'download', file: p.file, progress: p.progress });
-  const listen = async (task, key) => (await asr(audio, { language: lang === 'hi' ? 'hindi' : 'english', task, return_timestamps: true, chunk_length_s: 30, stride_length_s: 5 }))
+  const listen = async (task, key) => (await asr(audio, { language: lang === 'hi' ? 'hindi' : 'english', task, return_timestamps: true, chunk_length_s: 30, stride_length_s: 5, no_repeat_ngram_size: 3 })) // stops Whisper's 'पर पर पर…' loops
     .chunks.map(c => ({ start: c.timestamp[0], end: c.timestamp[1], [key]: c.text.replace(/\\[[^\\]]*\\]|\\([^)]*\\)|♪/g, '').trim() })).filter(s => s[key]); // drop [Music], (applause), ♪ tags
   try {
     // shortcut: WASM + 8-bit weights runs everywhere but is slower than WebGPU; switch device when WebGPU is common
@@ -729,7 +743,7 @@ async function exportVideo() {
   const chunks = [];
   rec.ondataavailable = e => e.data.size && chunks.push(e.data);
   rec.onstop = () => {
-    const blob = new Blob(chunks, {type}), name = 'edited-video.' + (type.startsWith('video/mp4') ? 'mp4' : 'webm'), link = $('#lastExport');
+    const blob = new Blob(chunks, {type}), name = 'klipzo-video.' + (type.startsWith('video/mp4') ? 'mp4' : 'webm'), link = $('#lastExport');
     download(blob, name);
     // browsers may block a download that starts without a click, so keep a clickable link to the result
     if (link.href) URL.revokeObjectURL(link.href);

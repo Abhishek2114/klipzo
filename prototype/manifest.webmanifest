@@ -1,6 +1,6 @@
 {
-  "name": "Auto Video Editor",
-  "short_name": "Video Editor",
+  "name": "Klipzo Beta",
+  "short_name": "Klipzo",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#111114",
