@@ -20,7 +20,9 @@ self.addEventListener('fetch', e => {
   // Hugging Face model files are cached by the speech library itself
   if (e.request.method !== 'GET' || /huggingface\.co$|hf\.co$/.test(url.hostname)) return;
   const own = url.origin === self.location.origin;
-  e.respondWith(fetch(e.request).then(r => {
+  // Own files: always ask the server whether they changed (GitHub Pages lets browsers reuse a copy for 10 min,
+  // so visitors saw old versions after an update). Unchanged files come back as a tiny "304 not modified".
+  e.respondWith((own ? fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(e.request)).then(r => {
     if (r.status === 200 || r.type === 'opaque') { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
     return own ? isolate(r) : r;
   }).catch(() => caches.match(e.request).then(r => (own ? isolate(r) : r))));
