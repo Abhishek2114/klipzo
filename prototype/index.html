@@ -377,7 +377,17 @@ let fieldBefore = null;
 document.addEventListener('focusin', e => { if (e.target.closest('[data-undo]')) fieldBefore = snap(); });
 document.addEventListener('change', e => { if (fieldBefore && e.target.closest('[data-undo]')) { commit(fieldBefore); fieldBefore = snap(); } });
 
-function edit(fn) { const before = snap(); pause(); fn(); commit(before); renderTimeline(); seek(Math.min(t, total())); }
+// Rebuild AI subtitles from the saved transcripts so they follow every cut, move and trim (no re-listening).
+// Keeps lines a person typed or corrected, and never re-adds an AI line a person already corrected.
+// shortcut: typed/corrected lines stay at their timeline time; anchor them to clips if users edit around them a lot
+function resyncSubs() {
+  if (!media.some(m => m.transcript?.length)) return;
+  const kept = subs.filter(x => !x.auto);
+  const made = subsFromTranscripts(timeline, getMedia).filter(g => !kept.some(k => k.edited && k.lang === g.lang && k.start < g.end && g.start < k.end));
+  subs.splice(0, subs.length, ...kept, ...made);
+  renderSubs();
+}
+function edit(fn) { const before = snap(); pause(); fn(); resyncSubs(); commit(before); renderTimeline(); seek(Math.min(t, total())); }
 const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${v}</option>`).join('');
 
 function renderTimeline() {
@@ -801,10 +811,7 @@ async function speechToSubs() {
       Object.assign(m, {transcript: r.segs, transcriptLang: r.lang, transcriptHas: r.has, speechSetting: setting});
     }
   }
-  // Keep subtitles a person typed or corrected; replace only machine-made ones, minus any a person already corrected.
-  const kept = subs.filter(x => !x.auto);
-  const made = subsFromTranscripts(timeline, getMedia).filter(g => !kept.some(k => k.edited && k.lang === g.lang && k.start < g.end && g.start < k.end));
-  subs.splice(0, subs.length, ...kept, ...made);
+  resyncSubs();
   renderSubs(); renderMedia(); draw();
 }
 $('#autoSubs').onclick = async () => {
@@ -897,6 +904,7 @@ $('#autoBtn').onclick = async () => {
   for (const m of media) if (!stopped && m.grade === undefined) await analyzeColor(m);
   if (!stopped && $('#cutSilence').checked) { busy('Cutting silent parts…', null, stop); await cutSilence(); }
   autoStyle();
+  resyncSubs(); // silence cuts just moved things; keep existing AI subtitles in place even if this run is cancelled
   if (!stopped) {
     try { await speechToSubs(); }
     catch (e) { if (e.message === CANCELLED) stopped = true; else notify('Subtitles were skipped: ' + e.message); }
